@@ -59,7 +59,7 @@ object AgyModelsService {
         if (cleanId.endsWith("-disabled") || cleanId.endsWith("_disabled") || cleanName.endsWith("-disabled")) return false
         if (cleanId.startsWith("debug") || cleanName.startsWith("debug")) return false
 
-        val knownAiPrefixes = listOf("gemini", "claude", "gpt", "o1", "o3", "o4", "deepseek", "llama", "mistral", "qwen")
+        val knownAiPrefixes = listOf("gemini", "claude", "gpt", "o1", "o3", "o4", "deepseek", "llama", "mistral", "qwen", "argon", "hydrogen", "neon", "orchestrator")
         val isKnownAi = knownAiPrefixes.any { cleanId.contains(it) || cleanName.contains(it) }
         val provider = providerForDisplayName(displayName).ifBlank { providerForDisplayName(cleanId) }
         val hasKnownProvider = provider == "Google" || provider == "Anthropic" || provider == "OpenAI"
@@ -68,7 +68,7 @@ object AgyModelsService {
     }
 
     fun providerForDisplayName(displayName: String): String = when {
-        displayName.startsWith("Gemini", ignoreCase = true) || displayName.contains("gemini", ignoreCase = true) || displayName.contains("google", ignoreCase = true) -> "Google"
+        displayName.startsWith("Gemini", ignoreCase = true) || displayName.contains("gemini", ignoreCase = true) || displayName.contains("google", ignoreCase = true) || displayName.contains("argon", ignoreCase = true) || displayName.contains("hydrogen", ignoreCase = true) || displayName.contains("neon", ignoreCase = true) -> "Google"
         displayName.startsWith("Claude", ignoreCase = true) || displayName.contains("claude", ignoreCase = true) || displayName.contains("anthropic", ignoreCase = true) -> "Anthropic"
         displayName.startsWith("GPT", ignoreCase = true) || displayName.contains("gpt", ignoreCase = true) || displayName.contains("openai", ignoreCase = true) -> "OpenAI"
         else -> ""

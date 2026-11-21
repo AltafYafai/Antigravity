@@ -8,7 +8,6 @@ import id.vern.antigravity.data.CodeAssistTier
 import id.vern.antigravity.data.ModelAvailability
 import id.vern.antigravity.data.QuotaBucket
 import id.vern.antigravity.data.QuotaGroup
-import id.vern.antigravity.data.SubscriptionTierType
 import id.vern.antigravity.data.TierInfo
 import id.vern.antigravity.data.UserQuotaSummary
 import id.vern.antigravity.oauth.OAuthManager
@@ -610,27 +609,20 @@ object CloudCodeQuotaService {
                 }
             }
 
-            val storedTier = context?.let { id.vern.antigravity.oauth.AccountManager.getActiveAccount(it)?.tierType }
-            val resolvedTier = tier?.tierType ?: storedTier
-            val hasArgonModelInCli = context?.let { ctx ->
+            val cliArgonTitles = context?.let { ctx ->
                 val prefsJson = ctx.getSharedPreferences("antigravity_prefs", Context.MODE_PRIVATE)
                     .getString("ag_cli_models_json", null).orEmpty()
                 val decoded = AgyModelsService.decodeCliModels(prefsJson)
-                decoded.any { isArgonModel(it.cliId, it.displayName) }
-            } ?: false
+                decoded.filter { isArgonModel(it.cliId, it.displayName) }.map { it.displayName }
+            } ?: emptyList()
 
             val hasArgonGroup = groupsList.any { it.displayName.contains("argon", ignoreCase = true) }
             val argonShared = argonModelTitles(orderedIds, modelsMap)
-            val isArgonSupported = hasArgonGroup ||
-                    argonShared.isNotEmpty() ||
-                    resolvedTier == SubscriptionTierType.PRO ||
-                    resolvedTier == SubscriptionTierType.ULTRA ||
-                    resolvedTier == SubscriptionTierType.ENTERPRISE ||
-                    hasArgonModelInCli
+            val isArgonSupported = hasArgonGroup || argonShared.isNotEmpty() || cliArgonTitles.isNotEmpty()
 
             if (!isArgonSupported) {
                 groupsList.removeAll { it.displayName.contains("argon", ignoreCase = true) }
-            } else if (!hasArgonGroup) {
+            } else if (!hasArgonGroup && (argonShared.isNotEmpty() || cliArgonTitles.isNotEmpty())) {
                 val aWeeklyFraction = argonWeeklyRem ?: 1.0
                 val aWeeklyReset = argonWeeklyReset
 
@@ -652,9 +644,10 @@ object CloudCodeQuotaService {
                     )
                 )
 
-                val argonTitlesList = argonShared.ifEmpty { listOf("Gemini 4 Argon") }
+                val argonTitlesList = argonShared.ifEmpty { cliArgonTitles }
+                val displayName = argonTitlesList.firstOrNull() ?: "Gemini 4 Argon"
                 val argonGroup = QuotaGroup(
-                    displayName = "Gemini 4 Argon",
+                    displayName = displayName,
                     description = "Models within this group: ${argonTitlesList.joinToString(", ")}",
                     sharedModels = argonTitlesList,
                     buckets = aBuckets
@@ -874,7 +867,7 @@ object CloudCodeQuotaService {
                             if (providerRaw == "MODEL_PROVIDER_GOOGLE" && mObj.has("quotaInfo")) {
                                 val qi = mObj.getJSONObject("quotaInfo")
                                 val isArgon = isArgonModel(mid)
-                                val isTarget = !isArgon && (mid.contains("flash", ignoreCase = true) || mid.contains("neon", ignoreCase = true) || mid.contains("pro", ignoreCase = true))
+                                val isTarget = !isArgon && AgyModelsService.isRealAiModel(mid, modelTitle(mObj, mid))
                                 if (isTarget) {
                                     val rem = if (qi.has("remainingFraction")) qi.optDouble("remainingFraction") else 0.0
                                     if (geminiRemainingFraction == null || rem < geminiRemainingFraction!!) {

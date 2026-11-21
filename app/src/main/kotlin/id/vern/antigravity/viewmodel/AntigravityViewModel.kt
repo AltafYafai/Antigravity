@@ -1159,24 +1159,9 @@ class AntigravityViewModel : ViewModel() {
 
     fun checkForOtaUpdates(context: Context, isManualCheck: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val pInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                    context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
-                } else {
-                    @Suppress("DEPRECATION") context.packageManager.getPackageInfo(context.packageName, 0)
-                }
-                val currentVersion = pInfo.versionName ?: "1.0.0"
-                val checker = UpdateChecker(context)
-                val info = checker.checkForUpdates(currentVersion, isManualCheck = isManualCheck)
-                if (info != null) {
-                    otaState.value = AppUpdateState.Available(info)
-                } else if (isManualCheck) {
-                    withContext(Dispatchers.Main) {
-                        android.widget.Toast.makeText(context, context.getString(R.string.ota_check_up_to_date), android.widget.Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w("AntigravityViewModel", "Failed checking OTA updates: ${e.message}")
+            val newState = CoreUpdateDelegate.checkForOtaUpdates(context, isManualCheck)
+            if (newState != null) {
+                otaState.value = newState
             }
         }
     }
@@ -1184,9 +1169,7 @@ class AntigravityViewModel : ViewModel() {
     fun startOtaDownload(context: Context, info: UpdateChecker.UpdateInfo) {
         otaState.value = AppUpdateState.Downloading(0)
         viewModelScope.launch(Dispatchers.IO) {
-            val checker = UpdateChecker(context)
-            val downloadId = checker.startDownload(info)
-            checker.trackDownloadProgress(downloadId) { state ->
+            CoreUpdateDelegate.startOtaDownload(context, info) { state ->
                 otaState.value = state
             }
         }
@@ -1197,36 +1180,18 @@ class AntigravityViewModel : ViewModel() {
     }
 
     fun checkForCoreEngineUpdate(context: Context, force: Boolean = false) {
-        val now = System.currentTimeMillis()
-        val lastChecked = coreUpdateState.value.lastCheckedTime
-        if (!force && lastChecked > 0 && now - lastChecked < 15 * 60 * 1000L) {
-            return
-        }
+        val current = CoreUpdateManager.getCurrentVersion(context)
+        coreUpdateState.value = coreUpdateState.value.copy(
+            isChecking = true,
+            currentVersion = current,
+            error = null
+        )
         viewModelScope.launch(Dispatchers.IO) {
-            val current = CoreUpdateManager.getCurrentVersion(context)
-            coreUpdateState.value = coreUpdateState.value.copy(
-                isChecking = true,
-                currentVersion = current,
-                error = null
-            )
-            try {
-                val updateInfo = CoreUpdateManager.checkForUpdate(context)
-                coreUpdateState.value = CoreEngineUpdateState(
-                    isChecking = false,
-                    currentVersion = current,
-                    latestVersion = updateInfo.version,
-                    isUpdateAvailable = updateInfo.isUpdateAvailable,
-                    downloadUrl = updateInfo.url,
-                    lastCheckedTime = System.currentTimeMillis(),
-                    error = null
-                )
-            } catch (e: Exception) {
-                Log.w("AntigravityViewModel", "Failed checking core engine update: ${e.message}")
-                coreUpdateState.value = coreUpdateState.value.copy(
-                    isChecking = false,
-                    currentVersion = current,
-                    error = e.message ?: "Network error"
-                )
+            val updated = CoreUpdateDelegate.checkForCoreEngineUpdate(context, force, coreUpdateState.value)
+            if (updated != null) {
+                coreUpdateState.value = updated
+            } else {
+                coreUpdateState.value = coreUpdateState.value.copy(isChecking = false)
             }
         }
     }
@@ -1237,7 +1202,7 @@ class AntigravityViewModel : ViewModel() {
         val url = state.downloadUrl ?: return
 
         val initialLines = listOf(
-            TerminalLine(text = "$ ${context.getString(R.string.core_update_cmd_title)}", isCommand = true),
+            TerminalLine(text = "$ " + context.getString(R.string.core_update_cmd_title), isCommand = true),
             TerminalLine(text = context.getString(R.string.core_update_checking))
         )
         activeInstallProgress.value = CustomizationInstallProgress(
@@ -1249,51 +1214,38 @@ class AntigravityViewModel : ViewModel() {
 
         viewModelScope.launch(Dispatchers.IO) {
             val outputLines = mutableListOf<TerminalLine>().apply { addAll(initialLines) }
-            val updateInfo = CoreUpdateInfo(
-                version = latestVer,
-                url = url,
-                currentVersion = state.currentVersion,
-                isUpdateAvailable = true
+            CoreUpdateDelegate.applyCoreEngineUpdate(
+                context = context,
+                state = state,
+                onOutputLine = { line ->
+                    synchronized(outputLines) { outputLines.add(line) }
+                    activeInstallProgress.value = activeInstallProgress.value?.copy(
+                        lines = outputLines.toList()
+                    )
+                },
+                onSuccess = { newVer ->
+                    coreUpdateState.value = coreUpdateState.value.copy(
+                        currentVersion = newVer,
+                        isUpdateAvailable = false,
+                        latestVersion = newVer
+                    )
+                    activeInstallProgress.value = activeInstallProgress.value?.copy(
+                        lines = outputLines.toList(),
+                        isRunning = false,
+                        isSuccess = true
+                    )
+                    if (engineStatus.value.isRunning) {
+                        restartCoreService(context)
+                    }
+                },
+                onError = { err ->
+                    activeInstallProgress.value = activeInstallProgress.value?.copy(
+                        lines = outputLines.toList(),
+                        isRunning = false,
+                        isSuccess = false
+                    )
+                }
             )
-
-            val result = CoreUpdateManager.downloadAndApply(context, updateInfo) { progress, step ->
-                synchronized(outputLines) {
-                    outputLines.add(TerminalLine(text = step, isError = false))
-                }
-                activeInstallProgress.value = activeInstallProgress.value?.copy(
-                    lines = outputLines.toList()
-                )
-            }
-
-            if (result.isSuccess) {
-                val newVer = result.getOrNull() ?: latestVer
-                synchronized(outputLines) {
-                    outputLines.add(TerminalLine(text = context.getString(R.string.core_update_success, newVer), isError = false))
-                }
-                coreUpdateState.value = coreUpdateState.value.copy(
-                    currentVersion = newVer,
-                    isUpdateAvailable = false,
-                    latestVersion = newVer
-                )
-                activeInstallProgress.value = activeInstallProgress.value?.copy(
-                    lines = outputLines.toList(),
-                    isRunning = false,
-                    isSuccess = true
-                )
-                if (engineStatus.value.isRunning) {
-                    restartCoreService(context)
-                }
-            } else {
-                val err = result.exceptionOrNull()?.message ?: "Unknown error"
-                synchronized(outputLines) {
-                    outputLines.add(TerminalLine(text = context.getString(R.string.core_update_failed, err), isError = true))
-                }
-                activeInstallProgress.value = activeInstallProgress.value?.copy(
-                    lines = outputLines.toList(),
-                    isRunning = false,
-                    isSuccess = false
-                )
-            }
         }
     }
 
@@ -1324,32 +1276,8 @@ class AntigravityViewModel : ViewModel() {
         }
     }
 
-    fun normalizeGitRepoUrl(rawUrl: String): Pair<String, String?> {
-        var clean = rawUrl.trim()
-        if (clean.isBlank()) return Pair("", null)
-        if (!clean.startsWith("http://") && !clean.startsWith("https://") && !clean.startsWith("git@")) {
-            clean = "https://github.com/" + clean.trimStart('/')
-        }
-        val treeRegex = Regex("""^(https?://[^/]+/[^/]+/[^/]+)/(?:tree|blob)/([^/]+)(?:/(.*))?$""")
-        val match = treeRegex.find(clean)
-        if (match != null) {
-            var baseRepo = match.groupValues[1]
-            if (!baseRepo.endsWith(".git")) {
-                baseRepo = "$baseRepo.git"
-            }
-            var subpath = match.groupValues.getOrNull(3)?.trim('/')?.ifEmpty { null }
-            if (subpath != null && subpath.lowercase().endsWith(".md")) {
-                val parent = subpath.substringBeforeLast('/', "")
-                subpath = parent.ifEmpty { null }
-            }
-            return Pair(baseRepo, subpath)
-        }
-        clean = clean.trimEnd('/')
-        if (!clean.endsWith(".git") && !clean.contains("@")) {
-            clean = "$clean.git"
-        }
-        return Pair(clean, null)
-    }
+    fun normalizeGitRepoUrl(rawUrl: String): Pair<String, String?> =
+        CustomizationTracker.normalizeGitRepoUrl(rawUrl)
 
     fun inspectRepoForSkills(context: Context, rawRepoUrl: String) {
         val (cleanUrl, subDir) = normalizeGitRepoUrl(rawRepoUrl)
@@ -1443,110 +1371,14 @@ class AntigravityViewModel : ViewModel() {
         }
     }
 
-    private fun prepareGitEnv(context: Context): String {
-        val filesDir = context.filesDir
-        val prefix = File(filesDir, "usr")
-        val binDir = File(prefix, "bin")
-        val gitExecDir = File(prefix, "libexec/git-core")
-        val templateDir = File(prefix, "share/git-core/templates").apply { mkdirs() }
-        val bashBin = File(binDir, "bash")
-        if (bashBin.exists()) {
-            try { Os.chmod(bashBin.absolutePath, 493) } catch (e: Exception) {}
-        }
-        val gitBin = File(binDir, "git")
-        if (gitBin.exists()) {
-            try { Os.chmod(gitBin.absolutePath, 493) } catch (e: Exception) {}
-        }
-        if (gitExecDir.isDirectory) {
-            gitExecDir.listFiles()?.forEach { file ->
-                file.setReadable(true, false)
-                file.setExecutable(true, false)
-                try { Os.chmod(file.absolutePath, 493) } catch (e: Exception) {}
-            }
-        }
+    private fun prepareGitEnv(context: Context): String =
+        CustomizationTracker.prepareGitEnv(context)
 
-        val gitExecPath = gitExecDir.absolutePath
-        val certFile = File(prefix, "etc/tls/cert.pem")
-        val certPath = certFile.absolutePath
+    private fun ensureSkillFiles(skillDir: File, homeSkillDir: File, id: String, name: String, desc: String) =
+        CustomizationTracker.ensureSkillFiles(skillDir, homeSkillDir, id, name, desc)
 
-        try {
-            EngineExecutor.healEnvironment(context)
-        } catch (e: Exception) {}
-
-        val ensureGitCmd = "if ! command -v git >/dev/null 2>&1 || [ ! -s '$certPath' ]; then echo '[Agent] Ensuring git and ca-certificates are installed...' && pkg update 2>/dev/null && pkg install git ca-certificates; fi && "
-        val exportCert = "export SSL_CERT_FILE='$certPath' && export CURL_CA_BUNDLE='$certPath' && export GIT_SSL_CAINFO='$certPath' && export OPENSSL_CONF='${prefix.absolutePath}/etc/tls/openssl.cnf' && "
-        val configGitCert = "if command -v git >/dev/null 2>&1 && [ -f '$certPath' ]; then git config --global http.sslCAInfo '$certPath' 2>/dev/null || true; git config --global http.sslVerify true 2>/dev/null || true; fi && "
-
-        return "export GIT_TERMINAL_PROMPT=0 && export GIT_CONFIG_NOSYSTEM=1 && export GIT_ATTR_NOSYSTEM=1 && export GIT_EXEC_PATH='$gitExecPath' && export GIT_TEMPLATE_DIR='${templateDir.absolutePath}' && export PATH=\"${binDir.absolutePath}:$gitExecPath:\$PATH\" && $ensureGitCmd$exportCert$configGitCert"
-    }
-
-    private fun ensureSkillFiles(skillDir: File, homeSkillDir: File, id: String, name: String, desc: String) {
-        try {
-            skillDir.mkdirs()
-            val skillMd = File(skillDir, "SKILL.md")
-            if (!skillMd.exists()) {
-                val foundSkillMd = skillDir.walkTopDown()
-                    .filter { it.isFile && it.name.equals("SKILL.md", ignoreCase = true) && !it.absolutePath.contains("/.git/") }
-                    .firstOrNull()
-                if (foundSkillMd != null && foundSkillMd.parentFile != null && foundSkillMd.parentFile != skillDir) {
-                    val srcDir = foundSkillMd.parentFile!!
-                    srcDir.copyRecursively(skillDir, overwrite = true)
-                }
-            }
-            if (!skillMd.exists()) {
-                val safeDesc = desc.ifBlank { name }
-                skillMd.writeText("---\nname: $id\ndescription: $safeDesc\n---\n\n# $name\n\n$safeDesc\n")
-            }
-            homeSkillDir.mkdirs()
-            skillDir.copyRecursively(homeSkillDir, overwrite = true)
-        } catch (e: Exception) {
-            Log.w("AntigravityViewModel", "Failed ensuring skill files: ${e.message}")
-        }
-    }
-
-    private fun ensurePluginFiles(pluginDir: File, homePluginDir: File, id: String, name: String, desc: String) {
-        try {
-            pluginDir.mkdirs()
-            val pJson = File(pluginDir, "plugin.json")
-            if (!pJson.exists()) {
-                val candidatePluginJson = File(pluginDir, ".antigravity-plugin/plugin.json")
-                val candidateClaudeJson = File(pluginDir, ".claude-plugin/plugin.json")
-                if (candidatePluginJson.exists()) {
-                    candidatePluginJson.copyTo(pJson, overwrite = true)
-                } else if (candidateClaudeJson.exists()) {
-                    candidateClaudeJson.copyTo(pJson, overwrite = true)
-                } else {
-                    val safeDesc = desc.ifBlank { name }.replace("\"", "\\\"").replace("\n", " ")
-                    pJson.writeText("{\n  \"name\": \"$id\",\n  \"version\": \"1.0.0\",\n  \"description\": \"$safeDesc\"\n}\n")
-                }
-            }
-            val rulesDir = File(pluginDir, "rules").apply { mkdirs() }
-            val agentsMd = File(rulesDir, "AGENTS.md")
-            if (!agentsMd.exists()) {
-                val candidateRules = listOf(
-                    File(pluginDir, "AGENTS.md"),
-                    File(pluginDir, "GEMINI.md"),
-                    File(pluginDir, "CLAUDE.md"),
-                    File(pluginDir, "README.md")
-                )
-                val existingCandidate = candidateRules.firstOrNull { it.exists() && it.length() > 0 }
-                if (existingCandidate != null) {
-                    existingCandidate.copyTo(agentsMd, overwrite = true)
-                } else {
-                    val firstMd = rulesDir.listFiles()?.firstOrNull { it.isFile && it.extension.equals("md", ignoreCase = true) }
-                    if (firstMd != null) {
-                        firstMd.copyTo(agentsMd, overwrite = true)
-                    } else {
-                        agentsMd.writeText("# $name\n\n$desc\n")
-                    }
-                }
-            }
-            homePluginDir.mkdirs()
-            pluginDir.copyRecursively(homePluginDir, overwrite = true)
-        } catch (e: Exception) {
-            Log.w("AntigravityViewModel", "Failed ensuring plugin files: ${e.message}")
-        }
-    }
+    private fun ensurePluginFiles(pluginDir: File, homePluginDir: File, id: String, name: String, desc: String) =
+        CustomizationTracker.ensurePluginFiles(pluginDir, homePluginDir, id, name, desc)
 
     fun installSkillViaTerminal(context: Context, skillItem: SkillCatalogueItem) {
         val directConfig = File(context.filesDir, ".gemini/config").apply { mkdirs() }
@@ -2144,119 +1976,31 @@ class AntigravityViewModel : ViewModel() {
         }
     }
 
-    fun getTrackedCustomizations(context: Context): Map<String, CustomizationRepoTrack> {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val raw = prefs.getString(KEY_CUSTOMIZATION_TRACKING, null) ?: return emptyMap()
-        val result = mutableMapOf<String, CustomizationRepoTrack>()
-        try {
-            val root = JSONObject(raw)
-            val keys = root.keys()
-            while (keys.hasNext()) {
-                val k = keys.next()
-                val obj = root.optJSONObject(k) ?: continue
-                result[k.lowercase()] = CustomizationRepoTrack(
-                    id = obj.optString("id", k),
-                    name = obj.optString("name", k),
-                    repoUrl = obj.optString("repoUrl", ""),
-                    isPlugin = obj.optBoolean("isPlugin", false),
-                    subPath = if (obj.has("subPath") && !obj.isNull("subPath")) obj.optString("subPath") else null,
-                    installedSha = obj.optString("installedSha", ""),
-                    remoteSha = if (obj.has("remoteSha") && !obj.isNull("remoteSha")) obj.optString("remoteSha") else null,
-                    lastChecked = obj.optLong("lastChecked", 0L),
-                    hasUpdate = obj.optBoolean("hasUpdate", false)
-                )
-            }
-        } catch (e: Exception) {
-            Log.e("AntigravityViewModel", "Failed parsing customization tracks", e)
-        }
-        return result
-    }
+    fun getTrackedCustomizations(context: Context): Map<String, CustomizationRepoTrack> =
+        CustomizationTracker.getTrackedCustomizations(context)
 
     fun saveTrackedCustomizations(context: Context, tracks: Map<String, CustomizationRepoTrack>) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        try {
-            val root = JSONObject()
-            for ((k, track) in tracks) {
-                val obj = JSONObject().apply {
-                    put("id", track.id)
-                    put("name", track.name)
-                    put("repoUrl", track.repoUrl)
-                    put("isPlugin", track.isPlugin)
-                    put("subPath", track.subPath)
-                    put("installedSha", track.installedSha)
-                    put("remoteSha", track.remoteSha)
-                    put("lastChecked", track.lastChecked)
-                    put("hasUpdate", track.hasUpdate)
-                }
-                root.put(k.lowercase(), obj)
-            }
-            prefs.edit().putString(KEY_CUSTOMIZATION_TRACKING, root.toString()).apply()
-            mutableCustomizationTracks.value = tracks
-        } catch (e: Exception) {
-            Log.e("AntigravityViewModel", "Failed saving customization tracks", e)
-        }
-    }
-
-    fun registerTrackedCustomization(context: Context, track: CustomizationRepoTrack) {
-        val current = getTrackedCustomizations(context).toMutableMap()
-        current[track.id.lowercase()] = track
-        saveTrackedCustomizations(context, current)
-    }
-
-    fun unregisterTrackedCustomization(context: Context, id: String) {
-        val current = getTrackedCustomizations(context).toMutableMap()
-        current.remove(id.lowercase())
-        saveTrackedCustomizations(context, current)
-    }
-
-    fun loadTrackedCustomizations(context: Context) {
-        val tracks = getTrackedCustomizations(context)
+        CustomizationTracker.saveTrackedCustomizations(context, tracks)
         mutableCustomizationTracks.value = tracks
     }
 
-    fun fetchLatestRepoCommitSha(repoUrl: String, subPath: String? = null): String? {
-        try {
-            val (cleanRepo, extractedSub) = normalizeGitRepoUrl(repoUrl)
-            var clean = cleanRepo.trim()
-            if (clean.startsWith("https://github.com/")) {
-                clean = clean.removePrefix("https://github.com/")
-            } else if (clean.startsWith("http://github.com/")) {
-                clean = clean.removePrefix("http://github.com/")
-            } else if (clean.startsWith("git@github.com:")) {
-                clean = clean.removePrefix("git@github.com:")
-            }
-            clean = clean.removeSuffix(".git").trim('/')
-            if (!clean.contains("/")) return null
-
-            val effectiveSub = subPath?.ifBlank { null } ?: extractedSub
-            val apiUrl = if (!effectiveSub.isNullOrBlank()) {
-                val cleanSub = effectiveSub.trim('/')
-                "https://api.github.com/repos/$clean/commits?path=$cleanSub&per_page=1"
-            } else {
-                "https://api.github.com/repos/$clean/commits?per_page=1"
-            }
-
-            val url = URL(apiUrl)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.setRequestProperty("User-Agent", "Antigravity-Agent")
-            conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
-
-            if (conn.responseCode in 200..299) {
-                val text = conn.inputStream.bufferedReader().use { it.readText() }
-                val array = JSONArray(text)
-                if (array.length() > 0) {
-                    val first = array.getJSONObject(0)
-                    return first.optString("sha")
-                }
-            }
-        } catch (e: Exception) {
-            Log.w("AntigravityViewModel", "Failed fetching commit sha for $repoUrl: ${e.message}")
-        }
-        return null
+    fun registerTrackedCustomization(context: Context, track: CustomizationRepoTrack) {
+        CustomizationTracker.registerTrackedCustomization(context, track)
+        loadTrackedCustomizations(context)
     }
+
+    fun unregisterTrackedCustomization(context: Context, id: String) {
+        CustomizationTracker.unregisterTrackedCustomization(context, id)
+        loadTrackedCustomizations(context)
+    }
+
+    fun loadTrackedCustomizations(context: Context) {
+        val tracks = CustomizationTracker.getTrackedCustomizations(context)
+        mutableCustomizationTracks.value = tracks
+    }
+
+    fun fetchLatestRepoCommitSha(repoUrl: String, subPath: String? = null): String? =
+        CustomizationTracker.fetchLatestRepoCommitSha(repoUrl, subPath)
 
     fun seedCatalogueTrackingIfInstalled(context: Context) {
         val installed = mutableListOf<CustomizationItem>()
@@ -2343,29 +2087,12 @@ class AntigravityViewModel : ViewModel() {
     }
 
     fun loadProjects(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val savedPaths = prefs.getStringSet(KEY_USER_PROJECTS, null)
-        val list = mutableListOf<File>()
-        if (savedPaths != null) {
-            val defaultDocsPath = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS).absolutePath
-            for (path in savedPaths) {
-
-                if (path == defaultDocsPath) continue
-                val f = File(path)
-                if (f.exists() && f.isDirectory) {
-                    list.add(f)
-                }
-            }
-        }
-
-        val sorted = sortProjects(list, mutableProjectSortOrder.value)
+        val sorted = ProjectPersistence.loadProjects(context, mutableProjectSortOrder.value)
         mutableProjectList.value = sorted
     }
 
     fun saveProjects(context: Context, list: List<File>) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val paths = list.map { it.absolutePath }.toSet()
-        prefs.edit().putStringSet(KEY_USER_PROJECTS, paths).apply()
+        ProjectPersistence.saveProjects(context, list)
     }
 
     fun addProject(context: Context, path: String): File {
@@ -2374,7 +2101,7 @@ class AntigravityViewModel : ViewModel() {
         val currentList = mutableProjectList.value.toMutableList()
         if (currentList.none { it.absolutePath == f.absolutePath }) {
             currentList.add(f)
-            val sorted = sortProjects(currentList, mutableProjectSortOrder.value)
+            val sorted = ProjectPersistence.sortProjects(currentList, mutableProjectSortOrder.value)
             mutableProjectList.value = sorted
             saveProjects(context, sorted)
         }
@@ -2394,41 +2121,8 @@ class AntigravityViewModel : ViewModel() {
         addLog("Workspace", "Removed project from list: $path")
     }
 
-    fun resolveTreeUriToFolder(context: Context, treeUri: Uri): File? {
-        try {
-            context.contentResolver.takePersistableUriPermission(
-                treeUri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-        } catch (e: Exception) {}
-
-        var resolvedPath: String? = null
-        try {
-            val docId = DocumentsContract.getTreeDocumentId(treeUri)
-            val split = docId.split(":")
-            val type = split.getOrNull(0) ?: ""
-            val relPath = if (split.size > 1) split[1] else ""
-            if (type.equals("primary", ignoreCase = true)) {
-                resolvedPath = if (relPath.isNotEmpty()) {
-                    "${Environment.getExternalStorageDirectory().absolutePath}/$relPath"
-                } else {
-                    Environment.getExternalStorageDirectory().absolutePath
-                }
-            } else if (type.isNotEmpty()) {
-                resolvedPath = "/storage/$type/$relPath"
-            }
-        } catch (e: Exception) {}
-
-        if (resolvedPath == null) {
-            val path = treeUri.path ?: ""
-            if (path.contains("primary:")) {
-                val sub = path.substringAfter("primary:")
-                resolvedPath = "${Environment.getExternalStorageDirectory().absolutePath}/$sub"
-            }
-        }
-
-        return resolvedPath?.let { File(it) }
-    }
+    fun resolveTreeUriToFolder(context: Context, treeUri: Uri): File? =
+        ProjectPersistence.resolveTreeUriToFolder(context, treeUri)
 
     fun addProjectFromTreeUri(context: Context, treeUri: Uri): File? {
         val folder = resolveTreeUriToFolder(context, treeUri)
@@ -2443,30 +2137,15 @@ class AntigravityViewModel : ViewModel() {
 
     fun setProjectSortOrder(context: Context, order: ProjectSortOrder) {
         mutableProjectSortOrder.value = order
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_PROJECT_SORT, order.name).apply()
-        mutableProjectList.update { sortProjects(it, order) }
+        ProjectPersistence.saveProjectSortOrder(context, order)
+        mutableProjectList.update { ProjectPersistence.sortProjects(it, order) }
     }
 
-    private fun sortProjects(list: List<File>, order: ProjectSortOrder): List<File> {
-        return when (order) {
-            ProjectSortOrder.NAME_ASC -> list.sortedBy { it.name.lowercase() }
-            ProjectSortOrder.NAME_DESC -> list.sortedByDescending { it.name.lowercase() }
-            ProjectSortOrder.DATE_DESC -> list.sortedByDescending { it.lastModified() }
-            ProjectSortOrder.DATE_ASC -> list.sortedBy { it.lastModified() }
-        }
-    }
+    private fun sortProjects(list: List<File>, order: ProjectSortOrder): List<File> =
+        ProjectPersistence.sortProjects(list, order)
 
     fun createProjectInFolder(context: Context, name: String, parentDir: File): File? {
-        val sanitized = name.trim().replace(Regex("[^a-zA-Z0-9._ -]"), "_")
-        if (sanitized.isEmpty()) return null
-        if (!parentDir.exists()) {
-            parentDir.mkdirs()
-        }
-        val newDir = File(parentDir, sanitized)
-        if (!newDir.exists()) {
-            newDir.mkdirs()
-        }
+        val newDir = ProjectPersistence.createProjectInFolder(name, parentDir) ?: return null
         val added = addProject(context, newDir.absolutePath)
         addLog("Workspace", "Created project folder: ${added.name} in ${parentDir.absolutePath}")
         return added
@@ -2487,215 +2166,33 @@ class AntigravityViewModel : ViewModel() {
     }
 
     fun saveConversationHistory(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val jsonArray = org.json.JSONArray()
-        for (item in mutableConversationHistory.value) {
-            val obj = org.json.JSONObject().apply {
-                put("id", item.id)
-                put("title", item.title)
-                put("timestamp", item.timestamp)
-                put("messageCount", item.messageCount)
-                put("isPinned", item.isPinned)
-                if (item.projectPath != null) put("projectPath", item.projectPath)
-            }
-            jsonArray.put(obj)
-        }
-        prefs.edit().putString(KEY_CONVERSATION_HISTORY, jsonArray.toString()).apply()
+        ConversationPersistence.saveConversationHistory(context, mutableConversationHistory.value)
     }
 
     fun saveLastActiveConversationId(context: Context, id: String?) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (id == null) {
-            prefs.edit().remove(KEY_LAST_ACTIVE_CONV_ID).apply()
-        } else {
-            prefs.edit().putString(KEY_LAST_ACTIVE_CONV_ID, id).apply()
-        }
+        ConversationPersistence.saveLastActiveConversationId(context, id)
     }
 
     fun saveMessagesForConversation(context: Context, conversationId: String, messages: List<ChatMessage>) {
         val messagesSnapshot = messages.toList()
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val convDir = File(context.filesDir, "conversations").apply { mkdirs() }
-                val file = File(convDir, "$conversationId.json")
-                val array = org.json.JSONArray()
-                for (msg in messagesSnapshot) {
-                    val obj = org.json.JSONObject().apply {
-                        put("id", msg.id)
-                        put("role", msg.role.name)
-                        put("content", msg.content)
-                        put("timestamp", msg.timestamp)
-                        put("status", msg.status.name)
-                        if (msg.thinking != null) put("thinking", msg.thinking)
-                        if (msg.commandRun != null) put("commandRun", msg.commandRun)
-                        if (msg.commandOutput != null) put("commandOutput", msg.commandOutput)
-                        if (msg.codeBlocks.isNotEmpty()) {
-                            val blocksArr = org.json.JSONArray()
-                            msg.codeBlocks.forEach { blocksArr.put(it) }
-                            put("codeBlocks", blocksArr)
-                        }
-                        if (msg.attachments.isNotEmpty()) {
-                            val attArr = org.json.JSONArray()
-                            for (att in msg.attachments) {
-                                val attObj = org.json.JSONObject().apply {
-                                    put("id", att.id)
-                                    put("uri", att.uri.toString())
-                                    put("name", att.name)
-                                    put("sizeBytes", att.sizeBytes)
-                                    put("mimeType", att.mimeType)
-                                    if (att.localPath != null) put("localPath", att.localPath)
-                                }
-                                attArr.put(attObj)
-                            }
-                            put("attachments", attArr)
-                        }
-                        if (msg.durationText != null) put("durationText", msg.durationText)
-                        if (msg.actionSummary != null) put("actionSummary", msg.actionSummary)
-                        if (msg.steps.isNotEmpty()) {
-                            val stepsArr = org.json.JSONArray()
-                            for (s in msg.steps) {
-                                val sObj = org.json.JSONObject().apply {
-                                    put("id", s.id)
-                                    put("kind", s.kind.name)
-                                    put("title", s.title)
-                                    if (s.detail != null) put("detail", s.detail)
-                                    if (s.lines != null) put("lines", s.lines)
-                                    if (s.diff != null) put("diff", s.diff)
-                                    if (s.durationSeconds != null) put("durationSeconds", s.durationSeconds)
-                                    put("isCompleted", s.isCompleted)
-                                    if (s.filePath != null) put("filePath", s.filePath)
-                                }
-                                stepsArr.put(sObj)
-                            }
-                            put("steps", stepsArr)
-                        }
-                    }
-                    array.put(obj)
-                }
-                file.writeText(array.toString())
-            } catch (e: Exception) {
-                Log.w("AntigravityViewModel", "Failed saving messages for conversation $conversationId: ${e.message}")
-            }
+            ConversationPersistence.saveMessagesForConversation(context, conversationId, messagesSnapshot)
         }
     }
 
     fun loadMessagesForConversation(context: Context, conversationId: String): List<ChatMessage> {
-        try {
-            val file = File(File(context.filesDir, "conversations"), "$conversationId.json")
-            if (!file.exists()) return emptyList()
-            val text = file.readText()
-            if (text.isBlank()) return emptyList()
-            val array = org.json.JSONArray(text)
-            val result = mutableListOf<ChatMessage>()
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                val roleStr = obj.optString("role", "USER")
-                val role = try { MessageRole.valueOf(roleStr) } catch (e: Exception) { MessageRole.USER }
-                val statusStr = obj.optString("status", "SENT")
-                val status = try { MessageStatus.valueOf(statusStr) } catch (e: Exception) { MessageStatus.SENT }
-                val codeBlocks = mutableListOf<String>()
-                if (obj.has("codeBlocks")) {
-                    val cbArr = obj.getJSONArray("codeBlocks")
-                    for (j in 0 until cbArr.length()) {
-                        codeBlocks.add(cbArr.getString(j))
-                    }
-                }
-                val attachments = mutableListOf<AttachedFile>()
-                if (obj.has("attachments")) {
-                    val attArr = obj.getJSONArray("attachments")
-                    for (j in 0 until attArr.length()) {
-                        val attObj = attArr.getJSONObject(j)
-                        attachments.add(
-                            AttachedFile(
-                                id = attObj.optString("id", UUID.randomUUID().toString()),
-                                uri = android.net.Uri.parse(attObj.optString("uri", "")),
-                                name = attObj.optString("name", "attachment"),
-                                sizeBytes = attObj.optLong("sizeBytes", 0L),
-                                mimeType = attObj.optString("mimeType", "application/octet-stream"),
-                                localPath = attObj.optString("localPath", "").ifEmpty { null }
-                            )
-                        )
-                    }
-                }
-                val steps = mutableListOf<AgentExecutionStep>()
-                if (obj.has("steps")) {
-                    val stepsArr = obj.getJSONArray("steps")
-                    for (k in 0 until stepsArr.length()) {
-                        val sObj = stepsArr.getJSONObject(k)
-                        val kStr = sObj.optString("kind", "COMMAND")
-                        val kind = try { AgentStepKind.valueOf(kStr) } catch (e: Exception) { AgentStepKind.COMMAND }
-                        steps.add(
-                            AgentExecutionStep(
-                                id = sObj.optString("id", UUID.randomUUID().toString()),
-                                kind = kind,
-                                title = sObj.optString("title", ""),
-                                detail = if (sObj.has("detail")) sObj.getString("detail") else null,
-                                lines = if (sObj.has("lines")) sObj.getString("lines") else null,
-                                diff = if (sObj.has("diff")) sObj.getString("diff") else null,
-                                durationSeconds = if (sObj.has("durationSeconds")) sObj.getInt("durationSeconds") else null,
-                                isCompleted = sObj.optBoolean("isCompleted", true),
-                                filePath = if (sObj.has("filePath")) sObj.getString("filePath") else null
-                            )
-                        )
-                    }
-                }
-                result.add(
-                    ChatMessage(
-                        id = obj.optString("id", UUID.randomUUID().toString()),
-                        role = role,
-                        content = obj.optString("content", ""),
-                        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
-                        status = status,
-                        attachments = attachments,
-                        thinking = if (obj.has("thinking")) obj.getString("thinking") else null,
-                        commandRun = if (obj.has("commandRun")) obj.getString("commandRun") else null,
-                        commandOutput = if (obj.has("commandOutput")) obj.getString("commandOutput") else null,
-                        codeBlocks = codeBlocks,
-                        durationText = if (obj.has("durationText")) obj.getString("durationText") else null,
-                        actionSummary = if (obj.has("actionSummary")) obj.getString("actionSummary") else null,
-                        steps = steps
-                    )
-                )
-            }
-            return result
-        } catch (e: Exception) {
-            Log.w("AntigravityViewModel", "Failed loading messages for conversation $conversationId: ${e.message}")
-            return emptyList()
-        }
+        return ConversationPersistence.loadMessagesForConversation(context, conversationId)
     }
 
     private fun deleteConversationFile(context: Context, conversationId: String) {
-        try {
-            val file = File(File(context.filesDir, "conversations"), "$conversationId.json")
-            if (file.exists()) file.delete()
-        } catch (e: Exception) {}
+        ConversationPersistence.deleteConversationFile(context, conversationId)
     }
 
     fun loadConversationHistory(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val jsonStr = prefs.getString(KEY_CONVERSATION_HISTORY, null)
-        val list = mutableListOf<ConversationSummary>()
-        if (!jsonStr.isNullOrBlank()) {
-            try {
-                val jsonArray = org.json.JSONArray(jsonStr)
-                for (i in 0 until jsonArray.length()) {
-                    val obj = jsonArray.getJSONObject(i)
-                    list.add(
-                        ConversationSummary(
-                            id = obj.getString("id"),
-                            title = obj.getString("title"),
-                            timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
-                            messageCount = obj.optInt("messageCount", 0),
-                            isPinned = obj.optBoolean("isPinned", false),
-                            projectPath = if (obj.has("projectPath")) obj.getString("projectPath") else null
-                        )
-                    )
-                }
-            } catch (e: Exception) {}
-        }
+        val list = ConversationPersistence.loadConversationHistory(context)
         mutableConversationHistory.value = list
 
-        val lastActiveId = prefs.getString(KEY_LAST_ACTIVE_CONV_ID, null)
+        val lastActiveId = ConversationPersistence.getLastActiveConversationId(context)
         val activeSummary = list.firstOrNull { it.id == lastActiveId } ?: list.firstOrNull()
         if (activeSummary != null) {
             mutableActiveConversationId.value = activeSummary.id
@@ -3270,332 +2767,25 @@ class AntigravityViewModel : ViewModel() {
         return if (remote.isNotEmpty()) remote else getDefaultSkillsCatalogue()
     }
 
-    fun getDefaultSkillsCatalogue(): List<SkillCatalogueItem> {
-        return listOf(
-            SkillCatalogueItem(
-                id = "antislop",
-                name = "antislop",
-                description = "Anti Slop: Rules for AI Coding Agents. The core filter. Load always to stop generic AI slop.",
-                category = "Quality & Filter",
-                repoUrl = "https://github.com/miqdadbadjuber/anti-slop.git",
-                subPath = "skills/antislop"
-            ),
-            SkillCatalogueItem(
-                id = "antislop-ui",
-                name = "antislop-ui",
-                description = "UI and visual skill for antislop. Use when building or editing any interface: color, layout, components, motion, and page performance.",
-                category = "UI & Visual",
-                repoUrl = "https://github.com/miqdadbadjuber/anti-slop.git",
-                subPath = "skills/antislop-ui"
-            ),
-            SkillCatalogueItem(
-                id = "antislop-copywriting",
-                name = "antislop-copywriting",
-                description = "Copy and text skill for antislop. Use when writing or editing prose: headlines, tone, CTAs, and anti-AI-writing patterns.",
-                category = "Copywriting",
-                repoUrl = "https://github.com/miqdadbadjuber/anti-slop.git",
-                subPath = "skills/antislop-copywriting"
-            ),
-            SkillCatalogueItem(
-                id = "antislop-human",
-                name = "antislop-human",
-                description = "Human and accessibility skill for antislop. Contrast, keyboard, focus, states, and interaction affordances for real people.",
-                category = "Accessibility",
-                repoUrl = "https://github.com/miqdadbadjuber/anti-slop.git",
-                subPath = "skills/antislop-human"
-            ),
-            SkillCatalogueItem(
-                id = "antislop-layoutmobile",
-                name = "antislop-layoutmobile",
-                description = "Mobile layout skill for antislop. Use for layouts that reflow across screen sizes, phone to desktop: grids, overflow, tap targets.",
-                category = "UI & Visual",
-                repoUrl = "https://github.com/miqdadbadjuber/anti-slop.git",
-                subPath = "skills/antislop-layoutmobile"
-            ),
-            SkillCatalogueItem(
-                id = "antislop-code",
-                name = "antislop-code",
-                description = "Code comment hygiene for AI coding agents: remove generic AI-slop comments, keep the valuable ones, never touch the code.",
-                category = "Development",
-                repoUrl = "https://github.com/miqdadbadjuber/anti-slop.git",
-                subPath = "skills/antislop-code"
-            ),
-            SkillCatalogueItem(
-                id = "antigravity-guide",
-                name = "antigravity-guide",
-                description = "Comprehensive guide, quick reference, and sitemap for Google Antigravity, AGY CLI, and runtime architecture.",
-                category = "System Guide"
-            ),
-            SkillCatalogueItem(
-                id = "agy-customizations",
-                name = "agy-customizations",
-                description = "Comprehensive guide and reference for authoring custom skills, rules, hooks, and MCP servers in Antigravity.",
-                category = "System Guide"
-            ),
-            SkillCatalogueItem(
-                id = "generative_ui",
-                name = "generative_ui",
-                description = "Render rich interactive HTML widgets, diagrams, controls, and visual components inline or as artifacts.",
-                category = "UI & Visual"
-            ),
-            SkillCatalogueItem(
-                id = "api-design-principles",
-                name = "api-design-principles",
-                description = "Master REST and GraphQL API design principles to build intuitive, scalable, and maintainable APIs that delight developers.",
-                category = "Architecture",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/api-design-principles"
-            ),
-            SkillCatalogueItem(
-                id = "architect-review",
-                name = "architect-review",
-                description = "Software architect specializing in modern architecture patterns, clean architecture, microservices, event-driven systems, and DDD.",
-                category = "Architecture",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/architect-review"
-            ),
-            SkillCatalogueItem(
-                id = "async-python-patterns",
-                name = "async-python-patterns",
-                description = "Master Python asyncio, concurrent programming, and async/await patterns for high-performance applications.",
-                category = "Development",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/async-python-patterns"
-            ),
-            SkillCatalogueItem(
-                id = "fastapi-pro",
-                name = "fastapi-pro",
-                description = "Build high-performance async APIs with FastAPI, SQLAlchemy 2.0, and Pydantic V2.",
-                category = "Development",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/fastapi-pro"
-            ),
-            SkillCatalogueItem(
-                id = "git-advanced-workflows",
-                name = "git-advanced-workflows",
-                description = "Master advanced Git workflows including rebasing, cherry-picking, bisect, worktrees, and reflog to maintain clean history.",
-                category = "Development",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/git-advanced-workflows"
-            ),
-            SkillCatalogueItem(
-                id = "code-review-excellence",
-                name = "code-review-excellence",
-                description = "Master effective code review practices to provide constructive feedback, catch bugs early, and foster knowledge sharing.",
-                category = "Quality & Filter",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/code-review-excellence"
-            ),
-            SkillCatalogueItem(
-                id = "backend-security-coder",
-                name = "backend-security-coder",
-                description = "Secure backend coding practices specializing in input validation, authentication, and API security.",
-                category = "Security",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/backend-security-coder"
-            ),
-            SkillCatalogueItem(
-                id = "database-architect",
-                name = "database-architect",
-                description = "Database architect specializing in data layer design, technology selection, schema modeling, and scalable database architectures.",
-                category = "Data",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/database-architect"
-            ),
-            SkillCatalogueItem(
-                id = "database-migration",
-                name = "database-migration",
-                description = "Execute database migrations across ORMs and platforms with zero-downtime strategies, data transformation, and rollback procedures.",
-                category = "Data",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/database-migration"
-            ),
-            SkillCatalogueItem(
-                id = "performance-engineer",
-                name = "performance-engineer",
-                description = "Performance engineer specializing in modern observability, application optimization, and scalable system performance.",
-                category = "Performance",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/performance-engineer"
-            ),
-            SkillCatalogueItem(
-                id = "e2e-testing-patterns",
-                name = "e2e-testing-patterns",
-                description = "Master end-to-end testing with Playwright and Cypress to build reliable test suites that catch bugs and improve confidence.",
-                category = "Testing",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = "skills/e2e-testing-patterns"
-            ),
-            SkillCatalogueItem(
-                id = "superpowers",
-                name = "superpowers",
-                description = "An agentic skills framework & software development methodology that works.",
-                category = "Developer Tools",
-                repoUrl = "https://github.com/obra/superpowers.git",
-                subPath = null
-            ),
-            SkillCatalogueItem(
-                id = "impeccable",
-                name = "impeccable",
-                description = "The design vocabulary for your coding agent. Steer with polish and bolder, review with critique and audit, catch AI slop before it ships.",
-                category = "UI & Visual",
-                repoUrl = "https://github.com/pbakaus/impeccable.git",
-                subPath = ".gemini/skills/impeccable"
-            ),
-            SkillCatalogueItem(
-                id = "antigravity-skills-manager",
-                name = "antigravity-skills-manager",
-                description = "A curated collection of Agent Skills for Google Antigravity.",
-                category = "Developer Tools",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = null
-            )
-        )
-    }
+    fun getDefaultSkillsCatalogue(): List<SkillCatalogueItem> =
+        CustomizationCatalogue.getDefaultSkillsCatalogue()
 
     fun getAvailablePluginsCatalogue(): List<SkillCatalogueItem> {
         val remote = mutablePluginsCatalogue.value
         return if (remote.isNotEmpty()) remote else getDefaultPluginsCatalogue()
     }
 
-    fun getDefaultPluginsCatalogue(): List<SkillCatalogueItem> {
-        return listOf(
-            SkillCatalogueItem(
-                id = "rtk",
-                name = "rtk",
-                description = "Rust Token Killer: CLI proxy that reduces LLM token consumption by 60-90% on common dev commands.",
-                category = "Optimization",
-                repoUrl = "https://github.com/rtk-ai/rtk.git",
-                isPlugin = true
-            ),
-            SkillCatalogueItem(
-                id = "antislop",
-                name = "antislop",
-                description = "Rules for an AI coding agent to filter out generic AI-generated UI designs, text, and code.",
-                category = "Quality & Filter",
-                repoUrl = "https://github.com/miqdadbadjuber/anti-slop.git",
-                isPlugin = true
-            ),
-            SkillCatalogueItem(
-                id = "superpowers",
-                name = "superpowers",
-                description = "An agentic skills framework & software development methodology that works.",
-                category = "Developer Tools",
-                repoUrl = "https://github.com/obra/superpowers.git",
-                subPath = null,
-                isPlugin = true
-            ),
-            SkillCatalogueItem(
-                id = "impeccable",
-                name = "impeccable",
-                description = "The design vocabulary for your coding agent. Steer with polish and bolder, review with critique and audit, catch AI slop before it ships.",
-                category = "UI & Visual",
-                repoUrl = "https://github.com/pbakaus/impeccable.git",
-                subPath = null,
-                isPlugin = true
-            ),
-            SkillCatalogueItem(
-                id = "context-mode",
-                name = "context-mode",
-                description = "Free, local plugin that keeps tool output out of your coding agent's context window. Sandbox and SQLite FTS5 search, 99% fewer bytes in context.",
-                category = "Optimization",
-                repoUrl = "https://github.com/mksglu/context-mode.git",
-                isPlugin = true
-            ),
-            SkillCatalogueItem(
-                id = "agents-suite",
-                name = "agents-suite",
-                description = "Plugins, agents, skills, and commands for AI coding agents written once in Markdown and adapted to each tool by generators with validation.",
-                category = "Developer Tools",
-                repoUrl = "https://github.com/wshobson/agents.git",
-                isPlugin = true
-            ),
-            SkillCatalogueItem(
-                id = "planning-with-files",
-                name = "planning-with-files",
-                description = "Persistent file-based planning for AI coding agents and long-running tasks. Crash-proof markdown plans and session recovery.",
-                category = "Productivity",
-                repoUrl = "https://github.com/OthmanAdi/planning-with-files.git",
-                isPlugin = true
-            ),
-            SkillCatalogueItem(
-                id = "sepia",
-                name = "sepia",
-                description = "De-AI writing skill for AI agents with narrative-architecture repair for fiction and venue-matched rules for prose.",
-                category = "Quality & Filter",
-                repoUrl = "https://github.com/Nanako0129/sepia.git",
-                isPlugin = true
-            ),
-            SkillCatalogueItem(
-                id = "gemini-agent-skills",
-                name = "gemini-agent-skills",
-                description = "A comprehensive collection of expert AI Agent Skills for Google Gemini, featuring tools to convert and optimize Claude Code agents.",
-                category = "Developer Tools",
-                repoUrl = "https://github.com/saeed-vayghan/gemini-agent-skills.git",
-                isPlugin = true
-            ),
-            SkillCatalogueItem(
-                id = "antigravity-skills-manager",
-                name = "antigravity-skills-manager",
-                description = "A curated collection of Agent Skills for Google Antigravity.",
-                category = "Developer Tools",
-                repoUrl = "https://github.com/rmyndharis/antigravity-skills.git",
-                subPath = null,
-                isPlugin = true
-            )
-        )
-    }
+    fun getDefaultPluginsCatalogue(): List<SkillCatalogueItem> =
+        CustomizationCatalogue.getDefaultPluginsCatalogue()
 
     private var lastCatalogueFetchTime = 0L
 
     fun loadCachedCatalogue(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val cacheDir = File(context.filesDir, "cache").apply { mkdirs() }
-                val skillsFile = File(cacheDir, "skills_catalogue.json")
-                if (skillsFile.exists() && skillsFile.length() > 0) {
-                    val parsed = parseCatalogueJson(skillsFile.readText(), false)
-                    if (parsed.isNotEmpty()) {
-                        mutableSkillsCatalogue.value = parsed
-                    }
-                }
-                val pluginsFile = File(cacheDir, "plugins_catalogue.json")
-                if (pluginsFile.exists() && pluginsFile.length() > 0) {
-                    val parsed = parseCatalogueJson(pluginsFile.readText(), true)
-                    if (parsed.isNotEmpty()) {
-                        mutablePluginsCatalogue.value = parsed
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w("AntigravityViewModel", "Failed loading cached catalogue: ${e.message}")
-            }
+            val (skills, plugins) = CustomizationCatalogue.loadCachedCatalogue(context)
+            if (skills.isNotEmpty()) mutableSkillsCatalogue.value = skills
+            if (plugins.isNotEmpty()) mutablePluginsCatalogue.value = plugins
         }
-    }
-
-    private fun parseCatalogueJson(jsonStr: String, isPluginDefault: Boolean): List<SkillCatalogueItem> {
-        val list = mutableListOf<SkillCatalogueItem>()
-        try {
-            val array = JSONArray(jsonStr)
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                val sub = if (obj.has("subPath") && !obj.isNull("subPath")) obj.getString("subPath").ifBlank { null } else null
-                list.add(
-                    SkillCatalogueItem(
-                        id = obj.getString("id"),
-                        name = obj.getString("name"),
-                        description = obj.optString("description", ""),
-                        category = obj.optString("category", if (isPluginDefault) "Optimization" else "Development"),
-                        isPlugin = obj.optBoolean("isPlugin", isPluginDefault),
-                        defaultPrompt = obj.optString("defaultPrompt", ""),
-                        repoUrl = obj.optString("repoUrl", ""),
-                        subPath = sub
-                    )
-                )
-            }
-        } catch (e: Exception) {
-            Log.w("AntigravityViewModel", "Failed parsing catalogue JSON: ${e.message}")
-        }
-        return list
     }
 
     fun fetchRemoteCatalogue(context: Context, force: Boolean = false) {
@@ -3608,38 +2798,14 @@ class AntigravityViewModel : ViewModel() {
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val cacheDir = File(context.filesDir, "cache").apply { mkdirs() }
-
-                val skillsUrl = URL("https://raw.githubusercontent.com/KuatoDev/antigravity-catalogue/main/skills.json")
-                val skillsConn = (skillsUrl.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                    requestMethod = "GET"
+                val pair = CustomizationCatalogue.fetchRemoteCatalogue(context)
+                if (pair != null) {
+                    val (skills, plugins) = pair
+                    if (skills.isNotEmpty()) mutableSkillsCatalogue.value = skills
+                    if (plugins.isNotEmpty()) mutablePluginsCatalogue.value = plugins
+                    lastCatalogueFetchTime = System.currentTimeMillis()
+                    addLog("Catalogue", "Updated catalogue: ${skills.size} skills, ${plugins.size} plugins from remote.")
                 }
-                val skillsJson = skillsConn.inputStream.bufferedReader().use { it.readText() }
-                val parsedSkills = parseCatalogueJson(skillsJson, false)
-                if (parsedSkills.isNotEmpty()) {
-                    mutableSkillsCatalogue.value = parsedSkills
-                    try { File(cacheDir, "skills_catalogue.json").writeText(skillsJson) } catch (e: Exception) {}
-                }
-
-                val pluginsUrl = URL("https://raw.githubusercontent.com/KuatoDev/antigravity-catalogue/main/plugins.json")
-                val pluginsConn = (pluginsUrl.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                    requestMethod = "GET"
-                }
-                val pluginsJson = pluginsConn.inputStream.bufferedReader().use { it.readText() }
-                val parsedPlugins = parseCatalogueJson(pluginsJson, true)
-                if (parsedPlugins.isNotEmpty()) {
-                    mutablePluginsCatalogue.value = parsedPlugins
-                    try { File(cacheDir, "plugins_catalogue.json").writeText(pluginsJson) } catch (e: Exception) {}
-                }
-
-                lastCatalogueFetchTime = System.currentTimeMillis()
-                addLog("Catalogue", "Updated catalogue: ${parsedSkills.size} skills, ${parsedPlugins.size} plugins from remote.")
-            } catch (e: Exception) {
-                Log.w("AntigravityViewModel", "Remote catalogue fetch failed: ${e.message}")
             } finally {
                 mutableIsFetchingCatalogue.value = false
             }
@@ -3892,72 +3058,10 @@ class AntigravityViewModel : ViewModel() {
     }
 
     fun calculateTokenUsage(context: Context): TokenUsageStats {
-        val rulesBreakdown = mutableListOf<Pair<String, Int>>()
-        val skillsBreakdown = mutableListOf<Pair<String, Int>>()
-        val configDir = getGeminiConfigDir(context)
-
-        val agentsFile = File(configDir, "AGENTS.md")
-        if (agentsFile.exists() && agentsFile.length() > 0) {
-            val tokens = (agentsFile.length() / 4).toInt()
-            rulesBreakdown.add("AGENTS.md" to tokens)
-        }
-
-        val pluginsDir = File(configDir, "plugins")
-        if (pluginsDir.isDirectory) {
-            pluginsDir.listFiles()?.filter { it.isDirectory }?.forEach { pDir ->
-                val ruleFile = File(pDir, "rules/AGENTS.md")
-                if (ruleFile.exists()) {
-                    val tokens = (ruleFile.length() / 4).toInt()
-                    rulesBreakdown.add("${pDir.name}/rules/AGENTS.md" to tokens)
-                }
-            }
-        }
-
-        val skillsDir = File(configDir, "skills")
-        if (skillsDir.isDirectory) {
-            skillsDir.listFiles()?.filter { it.isDirectory }?.forEach { sDir ->
-                val sFile = File(sDir, "SKILL.md")
-                if (sFile.exists()) {
-                    val tokens = (sFile.length() / 4).toInt()
-                    skillsBreakdown.add("skills/${sDir.name}" to tokens)
-                }
-            }
-        }
-
-        if (pluginsDir.isDirectory) {
-            pluginsDir.listFiles()?.filter { it.isDirectory }?.forEach { pDir ->
-                val pSkillsDir = File(pDir, "skills")
-                if (pSkillsDir.isDirectory) {
-                    pSkillsDir.listFiles()?.filter { it.isDirectory }?.forEach { sDir ->
-                        val sFile = File(sDir, "SKILL.md")
-                        if (sFile.exists() && skillsBreakdown.none { it.first == "${pDir.name}/${sDir.name}" || it.first == "skills/${sDir.name}" }) {
-                            val tokens = (sFile.length() / 4).toInt()
-                            skillsBreakdown.add("${pDir.name}/${sDir.name}" to tokens)
-                        }
-                    }
-                }
-            }
-        }
-
-        val builtinDir = getBuiltinSkillsDir(context)
-        if (builtinDir.isDirectory) {
-            builtinDir.listFiles()?.filter { it.isDirectory }?.take(6)?.forEach { sDir ->
-                val sFile = File(sDir, "SKILL.md")
-                if (sFile.exists() && skillsBreakdown.none { it.first == "skills/${sDir.name}" || it.first.endsWith("/${sDir.name}") }) {
-                    val tokens = (sFile.length() / 4).toInt()
-                    skillsBreakdown.add("builtin/${sDir.name}" to tokens)
-                }
-            }
-        }
-
-        val totalRulesTokens = rulesBreakdown.sumOf { it.second }
-        val totalSkillsTokens = skillsBreakdown.sumOf { it.second }
-
-        return TokenUsageStats(
-            rulesTokens = totalRulesTokens,
-            rulesBreakdowns = rulesBreakdown,
-            skillsTokens = totalSkillsTokens,
-            skillsBreakdowns = skillsBreakdown
+        return CustomizationCatalogue.calculateTokenUsage(
+            context = context,
+            configDir = getGeminiConfigDir(context),
+            builtinDir = getBuiltinSkillsDir(context)
         )
     }
 
@@ -5552,333 +4656,24 @@ class AntigravityViewModel : ViewModel() {
         }
     }
 
-    private val transcriptFileCache = java.util.concurrent.ConcurrentHashMap<String, File>()
+    private fun extractPathFromParams(params: JSONObject?): String =
+        TranscriptTurnParser.extractPathFromParams(params)
 
-    fun findActiveTranscriptFile(context: Context, cliConvId: String?): File? {
-        if (!cliConvId.isNullOrBlank()) {
-            transcriptFileCache[cliConvId]?.let { cached ->
-                if (cached.exists() && cached.isFile && cached.length() > 0) return cached
-            }
-        }
-        val filesDir = context.filesDir
-        val homeDir = File(filesDir, "home")
-        val envHome = System.getenv("HOME")?.let { File(it) }
-        val envAppData = System.getenv("ANTIGRAVITY_APP_DATA_DIR")?.let { File(it) }
-        val candidateBaseDirs = mutableListOf(
-            File(homeDir, ".gemini/antigravity-cli/brain"),
-            File(filesDir, ".gemini/antigravity-cli/brain"),
-            File(filesDir, ".gemini/antigravity-app/brain"),
-            File(homeDir, ".gemini/antigravity-app/brain")
-        )
-        if (envAppData != null && envAppData.exists()) {
-            candidateBaseDirs.add(File(envAppData, "brain"))
-        }
-        if (envHome != null && envHome != homeDir && envHome != filesDir && envHome.exists()) {
-            candidateBaseDirs.add(File(envHome, ".gemini/antigravity-cli/brain"))
-            candidateBaseDirs.add(File(envHome, ".gemini/antigravity-app/brain"))
-        }
+    private fun extractFileNameFromPath(path: String, fallback: String = "file"): String =
+        TranscriptTurnParser.extractFileNameFromPath(path, fallback)
 
-        if (!cliConvId.isNullOrBlank()) {
-            for (baseDir in candidateBaseDirs) {
-                val f = File(baseDir, "$cliConvId/.system_generated/logs/transcript.jsonl")
-                if (f.exists() && f.isFile && f.length() > 0) {
-                    transcriptFileCache[cliConvId] = f
-                    return f
-                }
-            }
-        }
+    fun findActiveTranscriptFile(context: Context, cliConvId: String?): File? =
+        TranscriptTurnParser.findActiveTranscriptFile(context, cliConvId)
 
-        var newestFile: File? = null
-        var newestTime = 0L
+    fun parseTranscriptTurn(context: Context, cliConvId: String?): ParsedTranscriptTurn =
+        TranscriptTurnParser.parseTranscriptTurn(context, cliConvId)
 
-        for (baseDir in candidateBaseDirs) {
-            if (!baseDir.exists() || !baseDir.isDirectory) continue
-            val convFolders = baseDir.listFiles() ?: continue
-            for (convDir in convFolders) {
-                if (!convDir.isDirectory) continue
-                val tf = File(convDir, ".system_generated/logs/transcript.jsonl")
-                if (tf.exists() && tf.isFile && tf.length() > 0) {
-                    val lm = tf.lastModified()
-                    if (lm > newestTime) {
-                        newestTime = lm
-                        newestFile = tf
-                    }
-                }
-            }
-        }
-        if (newestFile != null && !cliConvId.isNullOrBlank()) {
-            transcriptFileCache[cliConvId] = newestFile
-        }
-        return newestFile
-    }
+    fun extractStepsFromCliTranscript(context: Context, cliConvId: String?): List<AgentExecutionStep>? =
+        TranscriptTurnParser.parseTranscriptTurn(context, cliConvId).steps
 
-    private fun extractPathFromParams(params: org.json.JSONObject?): String {
-        if (params == null) return ""
-        val knownKeys = listOf(
-            "AbsolutePath", "absolute_path", "Path", "path",
-            "TargetFile", "target_file", "File", "file",
-            "FilePath", "filePath", "filepath", "target", "uri", "location"
-        )
-        for (k in knownKeys) {
-            val v = params.optString(k).trim().removeSurrounding("\"").removeSurrounding("'")
-            if (v.isNotEmpty()) return v
-        }
-        val keys = params.keys()
-        while (keys.hasNext()) {
-            val k = keys.next()
-            val v = params.optString(k).trim().removeSurrounding("\"").removeSurrounding("'")
-            if (v.isNotEmpty() && (v.contains('/') || v.contains('.')) && !v.contains('\n') && v.length < 250) {
-                return v
-            }
-        }
-        return ""
-    }
+    fun extractAllThinkingFromCliTranscript(context: Context, cliConvId: String?): String? =
+        TranscriptTurnParser.parseTranscriptTurn(context, cliConvId).thinking
 
-    private fun extractFileNameFromPath(path: String, fallback: String = "file"): String {
-        val clean = path.trim().removeSurrounding("\"").removeSurrounding("'")
-        if (clean.isBlank()) return fallback
-        val name = clean.substringAfterLast('/')
-        return name.ifBlank { fallback }
-    }
-
-    private fun parseIsoTimestamp(isoString: String?): Long {
-        if (isoString.isNullOrBlank()) return 0L
-        return try {
-            java.time.Instant.parse(isoString).toEpochMilli()
-        } catch (e: Exception) {
-            0L
-        }
-    }
-
-    private fun readTranscriptTurnLines(file: File, maxTailBytes: Long = 512 * 1024L): List<String> {
-        return try {
-            val length = file.length()
-            val rawLines: List<String> = if (length <= maxTailBytes) {
-                file.readLines()
-            } else {
-                java.io.RandomAccessFile(file, "r").use { raf ->
-                    val seekPos = length - maxTailBytes
-                    raf.seek(seekPos)
-                    val buffer = ByteArray(maxTailBytes.toInt())
-                    raf.readFully(buffer)
-                    val chunk = String(buffer, Charsets.UTF_8)
-                    val split = chunk.lines()
-                    if (split.size > 1) split.subList(1, split.size) else split
-                }
-            }
-
-            var lastUserIdx = -1
-            for (i in rawLines.indices) {
-                val l = rawLines[i]
-                if (l.contains("\"USER_INPUT\"")) {
-                    try {
-                        val obj = org.json.JSONObject(l)
-                        if (obj.optString("type") == "USER_INPUT") {
-                            lastUserIdx = i
-                        }
-                    } catch (e: Throwable) {}
-                }
-            }
-
-            if (lastUserIdx >= 0) {
-                rawLines.subList(lastUserIdx, rawLines.size).filter { it.isNotBlank() }
-            } else {
-                rawLines.filter { it.isNotBlank() }
-            }
-        } catch (e: Throwable) {
-            emptyList()
-        }
-    }
-
-    data class ParsedTranscriptTurn(
-        val thinking: String? = null,
-        val steps: List<AgentExecutionStep>? = null,
-        val assistantResponse: String? = null
-    )
-
-    fun parseTranscriptTurn(context: Context, cliConvId: String?): ParsedTranscriptTurn {
-        val transcriptFile = findActiveTranscriptFile(context, cliConvId) ?: return ParsedTranscriptTurn()
-        return try {
-            val turnLines = readTranscriptTurnLines(transcriptFile)
-            if (turnLines.isEmpty()) return ParsedTranscriptTurn()
-
-            val steps = mutableListOf<AgentExecutionStep>()
-            val thoughts = mutableListOf<String>()
-            var assistantResponse: String? = null
-            var prevTimestampMs = 0L
-
-            for (i in turnLines.indices) {
-                val line = turnLines[i]
-                if (line.isBlank()) continue
-                val obj = try { org.json.JSONObject(line) } catch (e: Throwable) { continue }
-                val type = obj.optString("type")
-                val createdAt = obj.optString("created_at")
-                val currTimestampMs = parseIsoTimestamp(createdAt)
-
-                if (type == "PLANNER_RESPONSE") {
-                    val content = obj.optString("content").trim()
-                    if (content.isNotBlank()) {
-                        assistantResponse = content
-                    }
-
-                    val thinking = obj.optString("thinking").trim()
-                    if (thinking.isNotBlank()) {
-                        if (!thoughts.contains(thinking)) {
-                            thoughts.add(thinking)
-                        }
-                        val durationSec = if (prevTimestampMs > 0L && currTimestampMs > prevTimestampMs) {
-                            ((currTimestampMs - prevTimestampMs) / 1000).toInt().coerceIn(1, 300)
-                        } else 6
-
-                        val safeThinking = if (thinking.length > 5000) thinking.take(5000) + "\n... [truncated]" else thinking
-                        steps.add(
-                            AgentExecutionStep(
-                                id = "step_${i}_thought",
-                                kind = AgentStepKind.THOUGHT,
-                                title = "Thought",
-                                detail = safeThinking,
-                                durationSeconds = durationSec,
-                                isCompleted = true
-                            )
-                        )
-                    }
-
-                    val toolCalls = obj.optJSONArray("tool_calls")
-                    if (toolCalls != null && toolCalls.length() > 0) {
-                        for (t in 0 until toolCalls.length()) {
-                            val tc = toolCalls.optJSONObject(t) ?: continue
-                            val toolName = tc.optString("name").substringAfterLast(":")
-                            val args = tc.optJSONObject("args")
-                                ?: tc.optJSONObject("parameters")
-                                ?: tc.optJSONObject("arguments")
-
-                            val nextGenericContent = if (i + 1 < turnLines.size) {
-                                try {
-                                    val nextObj = org.json.JSONObject(turnLines[i + 1])
-                                    if (nextObj.optString("type") == "GENERIC") {
-                                        nextObj.optString("content").ifBlank { null }
-                                    } else null
-                                } catch (e: Throwable) { null }
-                            } else null
-
-                            when (toolName) {
-                                "read_file", "view_file" -> {
-                                    val path = extractPathFromParams(args)
-                                    val fileName = extractFileNameFromPath(path, fallback = "file")
-                                    val start = args?.optInt("StartLine", -1) ?: -1
-                                    val end = args?.optInt("EndLine", -1) ?: -1
-                                    val linesStr = if (start > 0 && end >= start) "#L$start-$end" else if (start > 0) "#L$start" else null
-                                    steps.add(
-                                        AgentExecutionStep(
-                                            id = "step_${i}_tool_${t}",
-                                            kind = AgentStepKind.ANALYZED,
-                                            title = fileName,
-                                            filePath = path.ifEmpty { null },
-                                            lines = linesStr,
-                                            isCompleted = true
-                                        )
-                                    )
-                                }
-                                "write_to_file", "replace_file_content" -> {
-                                    val path = extractPathFromParams(args)
-                                    val fileName = extractFileNameFromPath(path, fallback = "file")
-                                    val targetContent = args?.optString("TargetContent") ?: ""
-                                    val replacementContent = args?.optString("ReplacementContent") ?: args?.optString("CodeContent") ?: ""
-                                    val delCount = if (targetContent.isNotBlank()) targetContent.count { it == '\n' } + 1 else 0
-                                    val addCount = if (replacementContent.isNotBlank()) replacementContent.count { it == '\n' } + 1 else 1
-                                    steps.add(
-                                        AgentExecutionStep(
-                                            id = "step_${i}_tool_${t}",
-                                            kind = AgentStepKind.EDITED,
-                                            title = fileName,
-                                            filePath = path.ifEmpty { null },
-                                            diff = "+$addCount -$delCount",
-                                            isCompleted = true
-                                        )
-                                    )
-                                }
-                                "run_command" -> {
-                                    val action = args?.optString("toolAction")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'") ?: ""
-                                    val summary = args?.optString("toolSummary")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'") ?: ""
-                                    val cmd = args?.optString("CommandLine")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'") ?: ""
-                                    val title = when {
-                                        action.isNotBlank() -> action
-                                        summary.isNotBlank() -> summary
-                                        cmd.length > 35 -> cmd.take(32) + "..."
-                                        else -> cmd.ifEmpty { "Command" }
-                                    }
-                                    val safeCmdDetail = if (nextGenericContent != null && nextGenericContent.length > 3000) nextGenericContent.take(3000) + "\n... [truncated]" else nextGenericContent
-                                    steps.add(
-                                        AgentExecutionStep(
-                                            id = "step_${i}_tool_${t}",
-                                            kind = AgentStepKind.COMMAND,
-                                            title = title,
-                                            detail = safeCmdDetail,
-                                            isCompleted = true
-                                        )
-                                    )
-                                }
-                                "schedule" -> {
-                                    val dur = args?.optInt("DurationSeconds", 0) ?: 0
-                                    steps.add(
-                                        AgentExecutionStep(
-                                            id = "step_${i}_tool_${t}",
-                                            kind = AgentStepKind.COMMAND,
-                                            title = if (dur > 0) "schedule (${dur}s)" else "schedule task",
-                                            isCompleted = true
-                                        )
-                                    )
-                                }
-                                "search_web" -> {
-                                    val q = args?.optString("query")?.trim()?.removeSurrounding("\"") ?: ""
-                                    steps.add(
-                                        AgentExecutionStep(
-                                            id = "step_${i}_tool_${t}",
-                                            kind = AgentStepKind.SEARCH,
-                                            title = if (q.length > 30) q.take(27) + "..." else q.ifEmpty { "web" },
-                                            isCompleted = true
-                                        )
-                                    )
-                                }
-                                else -> {
-                                    steps.add(
-                                        AgentExecutionStep(
-                                            id = "step_${i}_tool_${t}",
-                                            kind = AgentStepKind.COMMAND,
-                                            title = toolName.replace('_', ' '),
-                                            detail = nextGenericContent,
-                                            isCompleted = true
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                if (currTimestampMs > 0L) {
-                    prevTimestampMs = currTimestampMs
-                }
-            }
-            ParsedTranscriptTurn(
-                thinking = if (thoughts.isNotEmpty()) thoughts.joinToString("\n\n") else null,
-                steps = if (steps.isNotEmpty()) steps else null,
-                assistantResponse = assistantResponse
-            )
-        } catch (e: Throwable) {
-            ParsedTranscriptTurn()
-        }
-    }
-
-    fun extractStepsFromCliTranscript(context: Context, cliConvId: String?): List<AgentExecutionStep>? {
-        return parseTranscriptTurn(context, cliConvId).steps
-    }
-
-    fun extractAllThinkingFromCliTranscript(context: Context, cliConvId: String?): String? {
-        return parseTranscriptTurn(context, cliConvId).thinking
-    }
-
-    fun extractAssistantResponseFromCliTranscript(context: Context, cliConvId: String?): String? {
-        return parseTranscriptTurn(context, cliConvId).assistantResponse
-    }
+    fun extractAssistantResponseFromCliTranscript(context: Context, cliConvId: String?): String? =
+        TranscriptTurnParser.parseTranscriptTurn(context, cliConvId).assistantResponse
 }
-

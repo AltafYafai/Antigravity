@@ -148,15 +148,9 @@ internal fun getModelQuotaPercentage(
 
     return when {
         modelId.contains("Argon", ignoreCase = true) -> {
-            val fiveHB = argonGroup?.buckets?.firstOrNull { it.window == "5h" || it.bucketId.contains("5h") }
             val weeklyB = argonGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
-            if (fiveHB != null && weeklyB != null) {
-                val sub = "${fiveHB.subtext ?: ""} (Weekly: ${weeklyB.percentage}%)".trim()
-                Pair(fiveHB.percentage, sub)
-            } else {
-                val b = fiveHB ?: weeklyB
-                Pair(b?.percentage, b?.subtext)
-            }
+                ?: argonGroup?.buckets?.firstOrNull()
+            Pair(weeklyB?.percentage, weeklyB?.subtext)
         }
         modelId.contains("Flash", ignoreCase = true) || modelId.contains("Neon", ignoreCase = true) -> {
             val fiveHB = geminiGroup?.buckets?.firstOrNull { it.window == "5h" || it.bucketId.contains("5h") }

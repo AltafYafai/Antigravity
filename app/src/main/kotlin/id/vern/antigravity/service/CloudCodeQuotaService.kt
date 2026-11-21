@@ -113,8 +113,8 @@ object CloudCodeQuotaService {
                     conn.sslSocketFactory = sc.socketFactory
                     conn.hostnameVerifier = allHostsValid
                 }
-                conn.connectTimeout = 800
-                conn.readTimeout = 800
+                conn.connectTimeout = 2500
+                conn.readTimeout = 2500
                 conn.setRequestProperty("User-Agent", "antigravity")
                 val html = conn.inputStream.bufferedReader().use { it.readText() }
                 val tokenRegex = Regex("""\"?csrfToken\"?\s*:\s*\"([^\"]+)\"""")
@@ -131,7 +131,7 @@ object CloudCodeQuotaService {
         try {
             val curlBin = findCurlBinary(context)
             val process = ProcessBuilder(
-                curlBin, "-k", "-s", "--max-time", "1",
+                curlBin, "-k", "-s", "--max-time", "3",
                 "https://127.0.0.1:$port/"
             ).redirectErrorStream(true).start()
             val html = process.inputStream.bufferedReader().use { it.readText() }
@@ -152,6 +152,16 @@ object CloudCodeQuotaService {
     private fun getCandidateEndpoints(context: Context? = null): List<Pair<Int, String>> {
         val list = mutableListOf<Pair<Int, String>>()
 
+        val candidatePorts = listOf(45157, 45158, 45159, 45160)
+        for (port in candidatePorts) {
+            val liveToken = fetchCsrfTokenFromPort(port, context)
+            if (!liveToken.isNullOrBlank()) {
+                list.add(Pair(port, liveToken))
+                persistEndpoint(port, liveToken, context)
+                break
+            }
+        }
+
         val candidateFiles = mutableListOf<File>()
         if (context != null) {
             candidateFiles.add(File(context.filesDir, ".antigravity_endpoint"))
@@ -170,20 +180,6 @@ object CloudCodeQuotaService {
                     }
                 }
             } catch (e: Exception) {}
-        }
-
-        if (list.isNotEmpty()) {
-            return list.distinct()
-        }
-
-        val candidatePorts = listOf(45157, 45158, 45159, 45160)
-        for (port in candidatePorts) {
-            val liveToken = fetchCsrfTokenFromPort(port, context)
-            if (!liveToken.isNullOrBlank()) {
-                list.add(Pair(port, liveToken))
-                persistEndpoint(port, liveToken, context)
-                break
-            }
         }
 
         return list.distinct()
@@ -559,8 +555,8 @@ object CloudCodeQuotaService {
             val hasGeminiGroup = groupsList.any { it.displayName.contains("gemini", ignoreCase = true) && !it.displayName.contains("argon", ignoreCase = true) }
             if (!hasGeminiGroup) {
                 val googleShared = sharedModelTitles(orderedIds, modelsMap, googleGroup = true)
-                if (googleShared.isNotEmpty()) {
-                    val fiveHourFraction = gemini5hRem ?: 1.0
+                if (googleShared.isNotEmpty() && (gemini5hRem != null || geminiWeeklyRem != null)) {
+                    val fiveHourFraction = gemini5hRem ?: geminiWeeklyRem ?: 0.0
                     val fiveHourReset = gemini5hReset
                     val weeklyFraction = geminiWeeklyRem ?: fiveHourFraction
                     val weeklyReset = geminiWeeklyReset
@@ -622,8 +618,8 @@ object CloudCodeQuotaService {
 
             if (!isArgonSupported) {
                 groupsList.removeAll { it.displayName.contains("argon", ignoreCase = true) }
-            } else if (!hasArgonGroup && (argonShared.isNotEmpty() || cliArgonTitles.isNotEmpty())) {
-                val aWeeklyFraction = argonWeeklyRem ?: 1.0
+            } else if (!hasArgonGroup && (argonShared.isNotEmpty() || cliArgonTitles.isNotEmpty()) && argonWeeklyRem != null) {
+                val aWeeklyFraction = argonWeeklyRem!!
                 val aWeeklyReset = argonWeeklyReset
 
                 val aBuckets = mutableListOf<QuotaBucket>()
@@ -667,8 +663,8 @@ object CloudCodeQuotaService {
 
             val availableModels = buildAvailableModels(
                 orderedIds, modelsMap,
-                gemini5hRem ?: geminiWeeklyRem ?: 1.0, gemini5hReset ?: geminiWeeklyReset,
-                if (!isArgonSupported) null else (argonWeeklyRem ?: 1.0), if (!isArgonSupported) null else argonWeeklyReset,
+                gemini5hRem ?: geminiWeeklyRem, gemini5hReset ?: geminiWeeklyReset,
+                if (!isArgonSupported) null else argonWeeklyRem, if (!isArgonSupported) null else argonWeeklyReset,
                 thirdPartyWeeklyRem, thirdPartyWeeklyReset
             )
 
@@ -692,7 +688,8 @@ object CloudCodeQuotaService {
 
     private suspend fun fetchFromLocalLanguageServer(context: Context? = null, tier: CodeAssistTier? = null): UserQuotaSummary? {
         val candidates = getCandidateEndpoints(context)
-        for ((port, csrf) in candidates) {
+        for ((port, initialCsrf) in candidates) {
+            var activeCsrf = initialCsrf
             var respStr: String? = null
             var modelsRespStr: String? = null
 
@@ -710,7 +707,7 @@ object CloudCodeQuotaService {
                     conn.connectTimeout = 4000
                     conn.readTimeout = 4000
                     conn.setRequestProperty("Content-Type", "application/json")
-                    conn.setRequestProperty("x-codeium-csrf-token", csrf)
+                    conn.setRequestProperty("x-codeium-csrf-token", activeCsrf)
                     conn.setRequestProperty("Connect-Protocol-Version", "1")
 
                     OutputStreamWriter(conn.outputStream).use { it.write("{}"); it.flush() }
@@ -727,7 +724,16 @@ object CloudCodeQuotaService {
             }
 
             if (respStr.isNullOrBlank() || !respStr.contains("\"groups\"")) {
-                respStr = queryLocalEndpointViaCurl(port, csrf, "RetrieveUserQuotaSummary", "{}", context)
+                respStr = queryLocalEndpointViaCurl(port, activeCsrf, "RetrieveUserQuotaSummary", "{}", context)
+            }
+
+            if (respStr.isNullOrBlank() || !respStr.contains("\"groups\"")) {
+                val liveCsrf = fetchCsrfTokenFromPort(port, context)
+                if (!liveCsrf.isNullOrBlank() && liveCsrf != activeCsrf) {
+                    activeCsrf = liveCsrf
+                    persistEndpoint(port, liveCsrf, context)
+                    respStr = queryLocalEndpointViaCurl(port, activeCsrf, "RetrieveUserQuotaSummary", "{}", context)
+                }
             }
 
             if (!respStr.isNullOrBlank() && respStr.contains("\"groups\"")) {
@@ -742,7 +748,7 @@ object CloudCodeQuotaService {
                         connM.connectTimeout = 4000
                         connM.readTimeout = 4000
                         connM.setRequestProperty("Content-Type", "application/json")
-                        connM.setRequestProperty("x-codeium-csrf-token", csrf)
+                        connM.setRequestProperty("x-codeium-csrf-token", activeCsrf)
                         connM.setRequestProperty("Connect-Protocol-Version", "1")
 
                         OutputStreamWriter(connM.outputStream).use { it.write("{\"forceRefresh\": true}"); it.flush() }
@@ -757,7 +763,7 @@ object CloudCodeQuotaService {
                 }
 
                 if (modelsRespStr.isNullOrBlank()) {
-                    modelsRespStr = queryLocalEndpointViaCurl(port, csrf, "GetAvailableModels", "{\"forceRefresh\": true}", context)
+                    modelsRespStr = queryLocalEndpointViaCurl(port, activeCsrf, "GetAvailableModels", "{\"forceRefresh\": true}", context)
                 }
 
                 var modelsFetchFailed = false
@@ -780,7 +786,7 @@ object CloudCodeQuotaService {
                 val summary = parseQuotaSummaryResponse(respStr, modelsRespStr, tier, modelsFetchFailed, context)
                 if (summary != null && summary.groups.isNotEmpty()) {
                     Log.i(TAG, "Successfully loaded live quota from local server on port $port (${summary.groups.size} groups, models: ${summary.availableModels.size})")
-                    persistEndpoint(port, csrf, context)
+                    persistEndpoint(port, activeCsrf, context)
                     return summary
                 }
             }

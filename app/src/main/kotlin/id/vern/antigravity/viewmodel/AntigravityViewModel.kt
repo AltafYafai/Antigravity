@@ -640,9 +640,7 @@ class AntigravityViewModel : ViewModel() {
             mutableUserPicture.value = pic
         }
 
-        if (email != null) {
-            refreshUserQuota(context)
-        }
+        refreshUserQuota(context)
 
         viewModelScope.launch {
             if (OAuthManager.refreshTokenIfNeeded(context)) {
@@ -4508,6 +4506,7 @@ class AntigravityViewModel : ViewModel() {
                 saveConversationHistory(context)
                 saveMessagesForConversation(context, convId, currentList)
                 processNextQueuedMessage(context)
+                refreshUserQuota(context)
             }
         }
     }

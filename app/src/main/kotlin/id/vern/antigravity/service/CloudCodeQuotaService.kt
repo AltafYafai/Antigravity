@@ -413,7 +413,13 @@ object CloudCodeQuotaService {
         return picker
     }
 
-    private fun parseQuotaSummaryResponse(respStr: String, modelsRespStr: String? = null, tier: CodeAssistTier? = null, modelsFetchFailed: Boolean = false): UserQuotaSummary? {
+    private fun parseQuotaSummaryResponse(
+        respStr: String,
+        modelsRespStr: String? = null,
+        tier: CodeAssistTier? = null,
+        modelsFetchFailed: Boolean = false,
+        context: Context? = null
+    ): UserQuotaSummary? {
         return try {
             val root = JSONObject(respStr)
             val json = if (root.has("response")) root.getJSONObject("response") else root
@@ -604,44 +610,57 @@ object CloudCodeQuotaService {
                 }
             }
 
-            val isFreeTier = tier?.tierType == SubscriptionTierType.FREE
-            if (isFreeTier) {
+            val storedTier = context?.let { id.vern.antigravity.oauth.AccountManager.getActiveAccount(it)?.tierType }
+            val resolvedTier = tier?.tierType ?: storedTier
+            val hasArgonModelInCli = context?.let { ctx ->
+                val prefsJson = ctx.getSharedPreferences("antigravity_prefs", Context.MODE_PRIVATE)
+                    .getString("ag_cli_models_json", null).orEmpty()
+                val decoded = AgyModelsService.decodeCliModels(prefsJson)
+                decoded.any { isArgonModel(it.cliId, it.displayName) }
+            } ?: false
+
+            val hasArgonGroup = groupsList.any { it.displayName.contains("argon", ignoreCase = true) }
+            val argonShared = argonModelTitles(orderedIds, modelsMap)
+            val isArgonSupported = hasArgonGroup ||
+                    argonShared.isNotEmpty() ||
+                    resolvedTier == SubscriptionTierType.PRO ||
+                    resolvedTier == SubscriptionTierType.ULTRA ||
+                    resolvedTier == SubscriptionTierType.ENTERPRISE ||
+                    hasArgonModelInCli
+
+            if (!isArgonSupported) {
                 groupsList.removeAll { it.displayName.contains("argon", ignoreCase = true) }
-            } else {
-                val hasArgonGroup = groupsList.any { it.displayName.contains("argon", ignoreCase = true) }
-                val argonShared = argonModelTitles(orderedIds, modelsMap)
-                if (!hasArgonGroup && (argonShared.isNotEmpty() || argonWeeklyReset != null)) {
-                    val aWeeklyFraction = argonWeeklyRem ?: 1.0
-                    val aWeeklyReset = argonWeeklyReset
+            } else if (!hasArgonGroup) {
+                val aWeeklyFraction = argonWeeklyRem ?: 1.0
+                val aWeeklyReset = argonWeeklyReset
 
-                    val aBuckets = mutableListOf<QuotaBucket>()
-                    aBuckets.add(
-                        QuotaBucket(
-                            bucketId = "argon-weekly",
-                            displayName = "Weekly Limit Remaining",
-                            window = "weekly",
-                            resetTime = aWeeklyReset,
-                            description = if (!aWeeklyReset.isNullOrBlank()) {
-                                "You have used some of your Gemini 4 Argon limit, it will fully refresh in ${formatResetCountdown(aWeeklyReset)}."
-                            } else {
-                                "Individual Gemini 4 Argon weekly quota."
-                            },
-                            remainingFraction = aWeeklyFraction,
-                            disabled = false,
-                            subtext = formatSubtext(aWeeklyReset)
-                        )
+                val aBuckets = mutableListOf<QuotaBucket>()
+                aBuckets.add(
+                    QuotaBucket(
+                        bucketId = "argon-weekly",
+                        displayName = "Weekly Limit Remaining",
+                        window = "weekly",
+                        resetTime = aWeeklyReset,
+                        description = if (!aWeeklyReset.isNullOrBlank()) {
+                            "You have used some of your Gemini 4 Argon limit, it will fully refresh in ${formatResetCountdown(aWeeklyReset)}."
+                        } else {
+                            "Individual Gemini 4 Argon weekly quota."
+                        },
+                        remainingFraction = aWeeklyFraction,
+                        disabled = false,
+                        subtext = formatSubtext(aWeeklyReset)
                     )
+                )
 
-                    val argonTitlesList = argonShared.ifEmpty { listOf("Gemini 4 Argon") }
-                    val argonGroup = QuotaGroup(
-                        displayName = "Gemini 4 Argon",
-                        description = "Models within this group: ${argonTitlesList.joinToString(", ")}",
-                        sharedModels = argonTitlesList,
-                        buckets = aBuckets
-                    )
-                    val insertIdx = if (groupsList.isNotEmpty()) 1.coerceAtMost(groupsList.size) else 0
-                    groupsList.add(insertIdx, argonGroup)
-                }
+                val argonTitlesList = argonShared.ifEmpty { listOf("Gemini 4 Argon") }
+                val argonGroup = QuotaGroup(
+                    displayName = "Gemini 4 Argon",
+                    description = "Models within this group: ${argonTitlesList.joinToString(", ")}",
+                    sharedModels = argonTitlesList,
+                    buckets = aBuckets
+                )
+                val insertIdx = if (groupsList.isNotEmpty()) 1.coerceAtMost(groupsList.size) else 0
+                groupsList.add(insertIdx, argonGroup)
             }
 
             val pickerModels: List<CliModel> = if (modelsMap != null) {
@@ -656,7 +675,7 @@ object CloudCodeQuotaService {
             val availableModels = buildAvailableModels(
                 orderedIds, modelsMap,
                 gemini5hRem ?: geminiWeeklyRem ?: 1.0, gemini5hReset ?: geminiWeeklyReset,
-                if (isFreeTier) null else (argonWeeklyRem ?: 1.0), if (isFreeTier) null else argonWeeklyReset,
+                if (!isArgonSupported) null else (argonWeeklyRem ?: 1.0), if (!isArgonSupported) null else argonWeeklyReset,
                 thirdPartyWeeklyRem, thirdPartyWeeklyReset
             )
 
@@ -765,7 +784,7 @@ object CloudCodeQuotaService {
                     Log.w(TAG, "Local server candidate $port: model list could not be fetched (local GetAvailableModels and remote fetchAvailableModels both failed)")
                 }
 
-                val summary = parseQuotaSummaryResponse(respStr, modelsRespStr, tier, modelsFetchFailed)
+                val summary = parseQuotaSummaryResponse(respStr, modelsRespStr, tier, modelsFetchFailed, context)
                 if (summary != null && summary.groups.isNotEmpty()) {
                     Log.i(TAG, "Successfully loaded live quota from local server on port $port (${summary.groups.size} groups, models: ${summary.availableModels.size})")
                     persistEndpoint(port, csrf, context)
@@ -879,7 +898,8 @@ object CloudCodeQuotaService {
                         respStr = quotaRespStr,
                         modelsRespStr = modelsRespStr,
                         tier = tier,
-                        modelsFetchFailed = modelsRespStr == null
+                        modelsFetchFailed = modelsRespStr == null,
+                        context = context
                     )
                     if (summary != null && summary.groups.isNotEmpty()) {
                         Log.i(TAG, "Successfully loaded live quota from Google Cloud Code API for current token (${summary.groups.size} groups)")

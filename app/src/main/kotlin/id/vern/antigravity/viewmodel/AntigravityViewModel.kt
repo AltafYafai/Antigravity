@@ -51,6 +51,7 @@ import id.vern.antigravity.service.RuleConfigService
 import id.vern.antigravity.service.RuleItem
 import id.vern.antigravity.service.McpConfigService
 import id.vern.antigravity.service.McpServerItem
+import id.vern.antigravity.service.WakeLockHolder
 import id.vern.antigravity.ui.components.TerminalLine
 import id.vern.antigravity.ui.components.TerminalSessionManager
 import id.vern.antigravity.executor.EngineExecutor
@@ -4683,9 +4684,11 @@ class AntigravityViewModel : ViewModel() {
         executeAiTurn(context, effectiveContent, convId, currentAttachments)
     }
 
+    private val executionWakeLock = WakeLockHolder()
     private var currentAiExecutionJob: Job? = null
 
     fun stopAiExecution() {
+        executionWakeLock.release()
         addLog("Chat", "AI generation stopped by user")
         currentAiExecutionJob?.cancel()
         currentAiExecutionJob = null
@@ -4749,6 +4752,7 @@ class AntigravityViewModel : ViewModel() {
     ) {
         currentAiExecutionJob?.cancel()
         currentAiExecutionJob = viewModelScope.launch(Dispatchers.IO) {
+            executionWakeLock.acquire(context, 30 * 60 * 1000L)
             mutableIsExecuting.value = true
             mutableActiveWorkingStatus.value = "Working"
             val turnStartTime = System.currentTimeMillis()
@@ -5103,7 +5107,7 @@ class AntigravityViewModel : ViewModel() {
                                                 val now = System.currentTimeMillis()
                                                 if (state != "ACTIVE" || now - lastStepUpdateMs > 300L) {
                                                     lastStepUpdateMs = now
-                                                    val liveParsed = if (now - lastTranscriptPollMs > 600L || state != "ACTIVE") {
+                                                    val liveParsed = if (now - lastTranscriptPollMs > 3000L || state != "ACTIVE") {
                                                         lastTranscriptPollMs = now
                                                         parseTranscriptTurn(context, activeCliConvId)
                                                     } else null
@@ -5389,6 +5393,7 @@ class AntigravityViewModel : ViewModel() {
                     }
                 }
             } finally {
+                executionWakeLock.release()
                 mutableIsExecuting.value = false
                 mutableActiveWorkingStatus.value = null
                 currentAiExecutionJob = null

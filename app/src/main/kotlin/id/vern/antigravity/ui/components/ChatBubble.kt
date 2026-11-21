@@ -229,7 +229,8 @@ fun ChatBubble(
                                 markdown = message.content,
                                 textColor = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 12.sp,
-                                lineHeight = 17.sp
+                                lineHeight = 17.sp,
+                                selectable = message.status == MessageStatus.SENT
                             )
                         }
                     }
@@ -694,7 +695,8 @@ fun ChatBubble(
                             markdown = message.content,
                             textColor = MaterialTheme.colorScheme.onSurface,
                             fontSize = 12.sp,
-                            lineHeight = 17.sp
+                            lineHeight = 17.sp,
+                            selectable = message.status == MessageStatus.SENT
                         )
 
                         val toastCopiedMsg = stringResource(R.string.chat_toast_copied)

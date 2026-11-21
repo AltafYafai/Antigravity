@@ -279,12 +279,13 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     fontSize: TextUnit = 12.sp,
-    lineHeight: TextUnit = 17.sp
+    lineHeight: TextUnit = 17.sp,
+    selectable: Boolean = true
 ) {
     val context = LocalContext.current
     val elements = remember(markdown) { parseMarkdown(markdown) }
 
-    SelectionContainer {
+    val markdownBody = @Composable {
         Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             elements.forEachIndexed { index, element ->
                 key(index) {
@@ -397,6 +398,14 @@ fun MarkdownText(
                 }
             }
         }
+    }
+
+    if (selectable) {
+        SelectionContainer {
+            markdownBody()
+        }
+    } else {
+        markdownBody()
     }
 }
 

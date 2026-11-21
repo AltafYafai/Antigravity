@@ -436,7 +436,7 @@ fun ChatScreen(
 
     LaunchedEffect(lastMessageContentLength, lastMessageThinkingLength, lastMessageStepsCount, isExecuting) {
         if (isExecuting && messages.isNotEmpty() && !listState.isScrollInProgress) {
-            kotlinx.coroutines.delay(80)
+            kotlinx.coroutines.delay(200)
             runCatching {
                 listState.scrollToItem(messages.size)
             }

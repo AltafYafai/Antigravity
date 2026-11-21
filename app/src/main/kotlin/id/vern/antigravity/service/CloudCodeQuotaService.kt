@@ -843,7 +843,16 @@ object CloudCodeQuotaService {
                 )
             }
 
-            CodeAssistTier(currentTier = curTier, paidTier = paidTier)
+            val resultTier = CodeAssistTier(currentTier = curTier, paidTier = paidTier)
+            val email = OAuthManager.getUserEmail(context)
+            if (!email.isNullOrBlank()) {
+                id.vern.antigravity.oauth.AccountManager.updateAccountTier(
+                    context,
+                    email,
+                    resultTier.normalizedTierString
+                )
+            }
+            resultTier
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching code assist tier: ${e.message}", e)
             null

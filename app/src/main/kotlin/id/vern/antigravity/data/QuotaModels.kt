@@ -41,6 +41,32 @@ data class AvailableModelInfo(
                 (query.contains("Opus", ignoreCase = true) && (modelId.contains("Opus", ignoreCase = true) || displayName.contains("Opus", ignoreCase = true) || modelId.equals("Claude", ignoreCase = true))) ||
                 (query.contains("GPT", ignoreCase = true) && (modelId.contains("GPT", ignoreCase = true) || displayName.contains("GPT", ignoreCase = true)))
     }
+
+    val requiredTier: SubscriptionTierType get() {
+        val id = modelId.lowercase()
+        val name = displayName.lowercase()
+        return when {
+            id.contains("argon") || id.contains("neon") || id.contains("carbon") || id.contains("hydrogen") -> SubscriptionTierType.ULTRA
+            id.contains("claude") || id.contains("sonnet") || id.contains("opus") || id.contains("gpt") || name.contains("claude") || name.contains("gpt") -> SubscriptionTierType.PRO
+            else -> SubscriptionTierType.FREE
+        }
+    }
+
+    fun isAccessibleWithTier(userTier: SubscriptionTierType): Boolean {
+        return when (requiredTier) {
+            SubscriptionTierType.ULTRA -> userTier == SubscriptionTierType.ULTRA
+            SubscriptionTierType.PRO -> userTier == SubscriptionTierType.PRO || userTier == SubscriptionTierType.ULTRA || userTier == SubscriptionTierType.ENTERPRISE
+            SubscriptionTierType.ENTERPRISE -> userTier == SubscriptionTierType.ENTERPRISE || userTier == SubscriptionTierType.ULTRA
+            SubscriptionTierType.FREE -> true
+        }
+    }
+}
+
+enum class SubscriptionTierType {
+    FREE,
+    PRO,
+    ULTRA,
+    ENTERPRISE
 }
 
 data class QuotaGroup(
@@ -54,9 +80,7 @@ data class UserQuotaSummary(
     val groups: List<QuotaGroup> = emptyList(),
     val availableModels: List<AvailableModelInfo> = emptyList(),
     val description: String? = null,
-
     val modelsFetchFailed: Boolean = false,
-
     val pickerModels: List<CliModel> = emptyList()
 )
 
@@ -71,5 +95,26 @@ data class TierInfo(
 data class CodeAssistTier(
     val currentTier: TierInfo = TierInfo(),
     val paidTier: TierInfo? = null
-)
+) {
+    val tierType: SubscriptionTierType get() {
+        val paidId = paidTier?.id?.lowercase() ?: ""
+        val paidName = paidTier?.name?.lowercase() ?: ""
+        val curId = currentTier.id.lowercase()
+        val curName = currentTier.name.lowercase()
+
+        return when {
+            paidId.contains("ultra") || paidName.contains("ultra") || paidId.contains("helium") || curId.contains("ultra") || curId.contains("helium") -> SubscriptionTierType.ULTRA
+            paidId.contains("pro") || paidName.contains("pro") || paidId.contains("premium") || curId.contains("pro") || curId.contains("premium") -> SubscriptionTierType.PRO
+            paidId.contains("enterprise") || paidId.startsWith("gcp_") || curId.contains("enterprise") || curId.startsWith("gcp_") || curId.contains("standard") -> SubscriptionTierType.ENTERPRISE
+            else -> SubscriptionTierType.FREE
+        }
+    }
+
+    val normalizedTierString: String get() = when (tierType) {
+        SubscriptionTierType.ULTRA -> "ULTRA"
+        SubscriptionTierType.PRO -> "PRO"
+        SubscriptionTierType.ENTERPRISE -> "ENTERPRISE"
+        SubscriptionTierType.FREE -> "FREE"
+    }
+}
 

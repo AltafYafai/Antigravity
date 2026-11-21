@@ -187,6 +187,7 @@ migrations:  {
         }
 
         syncCompanionStateFiles(context)
+        AccountManager.importExistingTokenIfEmpty(context)
     }
 
     fun syncCompanionStateFiles(context: Context) {
@@ -485,6 +486,23 @@ migrations:  {
         return ok
     }
 
+    fun writeRawTokenJson(context: Context, tokenJson: String) {
+        invalidateCache()
+        val allTargets = getAllTokenTargets(context).toMutableList()
+        for (target in allTargets.distinct()) {
+            try {
+                target.parentFile?.mkdirs()
+                target.writeText(tokenJson, Charsets.UTF_8)
+                target.setReadable(true, false)
+                target.setWritable(true, false)
+            } catch (e: Exception) {}
+        }
+        syncCompanionStateFiles(context)
+        try {
+            id.vern.antigravity.service.CloudCodeQuotaService.restartLocalLanguageServer(context)
+        } catch (e: Exception) {}
+    }
+
     fun saveTokenJson(context: Context, tokenJson: String) {
         invalidateCache()
         val allTargets = getAllTokenTargets(context).toMutableList()
@@ -518,6 +536,18 @@ migrations:  {
         }
         syncCompanionStateFiles(context)
         val email = getUserEmail(context)
+        val name = getUserName(context) ?: email?.substringBefore("@") ?: ""
+        val pic = getUserPicture(context)
+        if (!email.isNullOrBlank()) {
+            AccountManager.saveOrUpdateAccount(
+                context = context,
+                email = email,
+                name = name,
+                picture = pic,
+                tokenJson = finalJsonStr,
+                makeActive = true
+            )
+        }
         AppLogger.d("Auth", "Saved OAuth credentials for ${if (email.isNullOrBlank()) "user" else email}")
         try {
             id.vern.antigravity.service.CloudCodeQuotaService.restartLocalLanguageServer(context)

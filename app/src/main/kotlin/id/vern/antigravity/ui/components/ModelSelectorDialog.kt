@@ -65,6 +65,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import id.vern.antigravity.R
 import id.vern.antigravity.data.CodeAssistTier
+import id.vern.antigravity.data.SubscriptionTierType
 import id.vern.antigravity.data.ModelAvailability
 import id.vern.antigravity.data.UserQuotaSummary
 import id.vern.antigravity.service.AgyModelsService
@@ -215,6 +216,35 @@ fun ModelSelectorDialog(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    Spacer(modifier = Modifier.weight(1f))
+                    val tierType = codeAssistTier?.tierType ?: SubscriptionTierType.FREE
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = when (tierType) {
+                            SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
+                            SubscriptionTierType.PRO -> AntigravityBlue.copy(alpha = 0.15f)
+                            SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    ) {
+                        Text(
+                            text = when (tierType) {
+                                SubscriptionTierType.ULTRA -> stringResource(R.string.account_tier_ultra)
+                                SubscriptionTierType.PRO -> stringResource(R.string.account_tier_pro)
+                                SubscriptionTierType.ENTERPRISE -> stringResource(R.string.account_tier_enterprise)
+                                else -> stringResource(R.string.account_tier_free)
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = when (tierType) {
+                                SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary
+                                SubscriptionTierType.PRO -> AntigravityBlue
+                                SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -237,8 +267,16 @@ fun ModelSelectorDialog(
                             getModelQuotaPercentage(model.id, userQuotaSummary)
                         }
 
+                        val activeTierType = codeAssistTier?.tierType ?: SubscriptionTierType.FREE
+                        val isModelTierAllowed = when {
+                            model.name.contains("Argon", ignoreCase = true) || model.name.contains("Neon", ignoreCase = true) || model.name.contains("Carbon", ignoreCase = true) -> activeTierType == SubscriptionTierType.ULTRA
+                            model.name.contains("Claude", ignoreCase = true) || model.name.contains("GPT", ignoreCase = true) -> activeTierType != SubscriptionTierType.FREE
+                            else -> true
+                        }
                         val modelAvailability = quotaModel?.availability ?: ModelAvailability.UNKNOWN
-                        val isAvailableForAccount = modelAvailability != ModelAvailability.UNAVAILABLE
+                        val isAvailableForAccount = (modelAvailability != ModelAvailability.UNAVAILABLE) && isModelTierAllowed
+                        val requiresPro = !isModelTierAllowed && (model.name.contains("Claude", ignoreCase = true) || model.name.contains("GPT", ignoreCase = true))
+                        val requiresUltra = !isModelTierAllowed && (model.name.contains("Argon", ignoreCase = true) || model.name.contains("Neon", ignoreCase = true) || model.name.contains("Carbon", ignoreCase = true))
 
                         Card(
                             shape = RoundedCornerShape(10.dp),
@@ -255,6 +293,18 @@ fun ModelSelectorDialog(
                                 .clickable {
                                     if (isAvailableForAccount) {
                                         onModelSelected(model.id, selectedThinking, model.cliIdFor(selectedThinking))
+                                    } else if (requiresUltra) {
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.model_toast_requires_ultra, model.name),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else if (requiresPro) {
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.model_toast_requires_pro, model.name),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     } else {
                                         Toast.makeText(
                                             context,
@@ -313,8 +363,13 @@ fun ModelSelectorDialog(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                                 Spacer(modifier = Modifier.width(3.dp))
+                                                val lockLabel = when {
+                                                    requiresUltra -> stringResource(R.string.model_status_requires_ultra)
+                                                    requiresPro -> stringResource(R.string.model_status_requires_pro)
+                                                    else -> stringResource(R.string.model_status_unavailable_account)
+                                                }
                                                 Text(
-                                                    text = stringResource(R.string.model_status_unavailable_account),
+                                                    text = lockLabel,
                                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )

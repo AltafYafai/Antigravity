@@ -58,6 +58,8 @@ import id.vern.antigravity.install.BootstrapInstaller
 import id.vern.antigravity.install.CoreUpdateManager
 import id.vern.antigravity.install.CoreUpdateInfo
 import id.vern.antigravity.oauth.OAuthManager
+import id.vern.antigravity.oauth.AccountManager
+import id.vern.antigravity.oauth.StoredAccount
 import id.vern.antigravity.service.CoreServerService
 import id.vern.antigravity.util.AppLogger
 import id.vern.antigravity.util.AppUpdateState
@@ -305,6 +307,9 @@ class AntigravityViewModel : ViewModel() {
 
     private val mutableUserEmail = MutableStateFlow<String?>(null)
     val userEmail: StateFlow<String?> = mutableUserEmail.asStateFlow()
+
+    private val mutableAccounts = MutableStateFlow<List<StoredAccount>>(emptyList())
+    val accounts: StateFlow<List<StoredAccount>> = mutableAccounts.asStateFlow()
 
     private val mutableUserQuotaSummary = MutableStateFlow<UserQuotaSummary?>(null)
     val userQuotaSummary: StateFlow<UserQuotaSummary?> = mutableUserQuotaSummary.asStateFlow()
@@ -620,6 +625,8 @@ class AntigravityViewModel : ViewModel() {
 
     fun refreshAuthState(context: Context) {
         OAuthManager.checkAndImportExistingToken(context)
+        val allAccounts = AccountManager.getAccounts(context)
+        mutableAccounts.value = allAccounts
         val email = OAuthManager.getUserEmail(context)
         mutableUserEmail.value = email
         val name = OAuthManager.getUserName(context) ?: if (email != null) {
@@ -663,6 +670,38 @@ class AntigravityViewModel : ViewModel() {
                 }
                 if (!userInfo.email.isNullOrBlank()) {
                     mutableUserEmail.value = userInfo.email
+                }
+            }
+            mutableAccounts.value = AccountManager.getAccounts(context)
+        }
+    }
+
+    fun switchAccount(context: Context, accountId: String) {
+        viewModelScope.launch {
+            val success = AccountManager.switchAccount(context, accountId)
+            if (success) {
+                mutableUserQuotaSummary.value = null
+                mutableCodeAssistTier.value = null
+                refreshAuthState(context)
+                CloudCodeQuotaService.restartLocalLanguageServer(context)
+                restartCoreService(context)
+                refreshUserQuota(context)
+                refreshCliModels(context)
+            }
+        }
+    }
+
+    fun removeAccount(context: Context, accountId: String) {
+        viewModelScope.launch {
+            val success = AccountManager.removeAccount(context, accountId)
+            if (success) {
+                refreshAuthState(context)
+                val currentActive = AccountManager.getActiveAccount(context)
+                if (currentActive != null) {
+                    CloudCodeQuotaService.restartLocalLanguageServer(context)
+                    restartCoreService(context)
+                    refreshUserQuota(context)
+                    refreshCliModels(context)
                 }
             }
         }

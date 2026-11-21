@@ -614,5 +614,22 @@
     <string name="ota_downloading_wait_msg">Mohon tunggu selagi pembaruan sedang diunduh…</string>
     <string name="logs_prefix">Catatan Rilis:\n</string>
     <string name="ota_check_up_to_date">Aplikasi sudah versi terbaru</string>
+    <string name="account_switcher_title">Akun Google</string>
+    <string name="account_switcher_subtitle">Beralih antar akun dan tingkat langganan terhubung</string>
+    <string name="account_active_badge">Aktif</string>
+    <string name="account_switch_action">Beralih ke akun ini</string>
+    <string name="account_add_button">Tambah Akun Google</string>
+    <string name="account_remove_button">Hapus</string>
+    <string name="account_remove_confirm_title">Hapus Akun</string>
+    <string name="account_remove_confirm_message">Apakah Anda yakin ingin menghapus %1$s dari daftar akun?</string>
+    <string name="account_switched_toast">Beralih ke akun %1$s</string>
+    <string name="account_tier_label">Tingkat: %1$s</string>
+    <string name="account_tier_free">Free</string>
+    <string name="account_tier_pro">Pro</string>
+    <string name="account_tier_ultra">Ultra</string>
+    <string name="account_tier_enterprise">Enterprise</string>
+    <string name="model_status_requires_pro">Memerlukan tier Pro</string>
+    <string name="model_toast_requires_pro">%1$s memerlukan langganan Google AI Pro</string>
+    <string name="model_toast_requires_ultra">%1$s memerlukan langganan Google AI Ultra</string>
 </resources>
 

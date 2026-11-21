@@ -1950,7 +1950,14 @@ fun ModelsAndUsageSettingsPage(
                                 avail.matches(cli.cliId)
                             }
                             val pct = matchingAvail?.percentage ?: getModelQuotaPercentage(cli.cliId, userQuotaSummary).first
-                            val resetT = matchingAvail?.resetTime
+                            val isArgon = cli.cliId.contains("argon", ignoreCase = true) || cli.displayName.contains("argon", ignoreCase = true)
+                            val resetT = matchingAvail?.resetTime ?: (
+                                if (isArgon) {
+                                    userQuotaSummary?.groups?.firstOrNull { it.displayName.contains("argon", ignoreCase = true) }?.buckets?.firstOrNull()?.resetTime
+                                } else {
+                                    userQuotaSummary?.groups?.firstOrNull { it.displayName.contains("gemini", ignoreCase = true) && !it.displayName.contains("argon", ignoreCase = true) }?.buckets?.firstOrNull()?.resetTime
+                                }
+                            )
                             val availStatus = matchingAvail?.availability ?: ModelAvailability.AVAILABLE
                             AvailableModelInfo(
                                 modelId = cli.cliId,
@@ -2033,8 +2040,9 @@ fun ModelsAndUsageSettingsPage(
                                                 color = if ((m.percentage ?: 0) > 20) AntigravityGreen else MaterialTheme.colorScheme.error
                                             )
                                         } else if (m.resetTime != null) {
+                                            val countdown = id.vern.antigravity.service.CloudCodeQuotaService.formatResetCountdown(m.resetTime)
                                             Text(
-                                                text = stringResource(R.string.status_weekly_limit_reached),
+                                                text = "${stringResource(R.string.status_weekly_limit_reached)} · $countdown",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = FontWeight.Medium,
                                                 color = MaterialTheme.colorScheme.error

@@ -35,6 +35,7 @@ data class AvailableModelInfo(
         return modelId.equals(query, ignoreCase = true) ||
                 displayName.equals(query, ignoreCase = true) ||
                 (query.contains("Flash", ignoreCase = true) && (modelId.contains("Flash", ignoreCase = true) || displayName.contains("Flash", ignoreCase = true))) ||
+                (query.contains("Neon", ignoreCase = true) && (modelId.contains("Neon", ignoreCase = true) || displayName.contains("Neon", ignoreCase = true))) ||
                 (query.contains("Argon", ignoreCase = true) && (modelId.contains("Argon", ignoreCase = true) || displayName.contains("Argon", ignoreCase = true))) ||
                 (query.contains("Carbon", ignoreCase = true) && (modelId.contains("Carbon", ignoreCase = true) || displayName.contains("Carbon", ignoreCase = true))) ||
                 (query.contains("Sonnet", ignoreCase = true) && (modelId.contains("Sonnet", ignoreCase = true) || displayName.contains("Sonnet", ignoreCase = true) || modelId.equals("Claude", ignoreCase = true))) ||
@@ -46,8 +47,8 @@ data class AvailableModelInfo(
         val id = modelId.lowercase()
         val name = displayName.lowercase()
         return when {
-            id.contains("argon") || id.contains("neon") || id.contains("carbon") || id.contains("hydrogen") -> SubscriptionTierType.ULTRA
-            id.contains("claude") || id.contains("sonnet") || id.contains("opus") || id.contains("gpt") || name.contains("claude") || name.contains("gpt") -> SubscriptionTierType.PRO
+            id.contains("carbon") || id.contains("hydrogen") -> SubscriptionTierType.ULTRA
+            id.contains("argon") || id.contains("neon") || id.contains("claude") || id.contains("sonnet") || id.contains("opus") || id.contains("gpt") || name.contains("claude") || name.contains("gpt") -> SubscriptionTierType.PRO
             else -> SubscriptionTierType.FREE
         }
     }

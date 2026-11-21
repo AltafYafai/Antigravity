@@ -137,14 +137,27 @@ internal fun getModelQuotaPercentage(
     if (summary == null) return Pair(null, null)
     val matchingAvail = summary.availableModels.firstOrNull { it.matches(modelId) }
     if (matchingAvail != null && matchingAvail.percentage != null) {
-        return Pair(matchingAvail.percentage, null)
+        val sub = matchingAvail.resetTime?.let { id.vern.antigravity.service.CloudCodeQuotaService.formatSubtext(it) }
+        return Pair(matchingAvail.percentage, sub)
     }
-    val geminiGroup = summary.groups.firstOrNull { it.displayName.contains("gemini", ignoreCase = true) }
+    val geminiGroup = summary.groups.firstOrNull { it.displayName.contains("gemini", ignoreCase = true) && !it.displayName.contains("argon", ignoreCase = true) }
+    val argonGroup = summary.groups.firstOrNull { it.displayName.contains("argon", ignoreCase = true) }
     val thirdPartyGroup = summary.groups.firstOrNull {
         it.displayName.contains("claude", ignoreCase = true) || it.displayName.contains("gpt", ignoreCase = true)
     }
 
     return when {
+        modelId.contains("Argon", ignoreCase = true) -> {
+            val fiveHB = argonGroup?.buckets?.firstOrNull { it.window == "5h" || it.bucketId.contains("5h") }
+            val weeklyB = argonGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
+            if (fiveHB != null && weeklyB != null) {
+                val sub = "${fiveHB.subtext ?: ""} (Weekly: ${weeklyB.percentage}%)".trim()
+                Pair(fiveHB.percentage, sub)
+            } else {
+                val b = fiveHB ?: weeklyB
+                Pair(b?.percentage, b?.subtext)
+            }
+        }
         modelId.contains("Flash", ignoreCase = true) || modelId.contains("Neon", ignoreCase = true) -> {
             val fiveHB = geminiGroup?.buckets?.firstOrNull { it.window == "5h" || it.bucketId.contains("5h") }
             val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
@@ -156,7 +169,7 @@ internal fun getModelQuotaPercentage(
                 Pair(b?.percentage, b?.subtext)
             }
         }
-        modelId.contains("Argon", ignoreCase = true) || modelId.contains("Carbon", ignoreCase = true) || modelId.contains("Gemini", ignoreCase = true) -> {
+        modelId.contains("Carbon", ignoreCase = true) || modelId.contains("Gemini", ignoreCase = true) -> {
             val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
             Pair(weeklyB?.percentage, weeklyB?.subtext)
         }

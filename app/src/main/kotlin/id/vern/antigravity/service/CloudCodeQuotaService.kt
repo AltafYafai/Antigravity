@@ -33,9 +33,17 @@ import javax.net.ssl.X509TrustManager
 
 object CloudCodeQuotaService {
     private const val TAG = "CloudCodeQuota"
-    private const val QUOTA_URL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
-    private const val MODELS_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-    private const val TIER_URL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+    private const val CLOUDCODE_DAILY_BASE = "https://daily-cloudcode-pa.googleapis.com"
+    private const val CLOUDCODE_PROD_BASE = "https://cloudcode-pa.googleapis.com"
+    private val CLOUDCODE_BASES = listOf(CLOUDCODE_DAILY_BASE, CLOUDCODE_PROD_BASE)
+
+    private const val QUOTA_PATH = "/v1internal:retrieveUserQuotaSummary"
+    private const val MODELS_PATH = "/v1internal:fetchAvailableModels"
+    private const val TIER_PATH = "/v1internal:loadCodeAssist"
+
+    private const val QUOTA_URL = "$CLOUDCODE_DAILY_BASE$QUOTA_PATH"
+    private const val MODELS_URL = "$CLOUDCODE_DAILY_BASE$MODELS_PATH"
+    private const val TIER_URL = "$CLOUDCODE_DAILY_BASE$TIER_PATH"
 
     private val cachedSslContext: SSLContext? by lazy {
         try {
@@ -485,11 +493,17 @@ object CloudCodeQuotaService {
                                 val rem = qi.optDouble("remainingFraction")
                                 if (gemini5hRem == null || rem < gemini5hRem!!) {
                                     gemini5hRem = rem
+                                    if (qi.has("resetTime")) {
+                                        val rt = qi.optString("resetTime").takeIf { it.isNotBlank() }
+                                        if (rt != null) {
+                                            gemini5hReset = rt
+                                        }
+                                    }
                                 }
                             }
-                            if (qi.has("resetTime")) {
+                            if (gemini5hReset == null && qi.has("resetTime")) {
                                 val rt = qi.optString("resetTime").takeIf { it.isNotBlank() }
-                                if (rt != null && gemini5hReset == null) {
+                                if (rt != null) {
                                     gemini5hReset = rt
                                 }
                             }
@@ -514,7 +528,7 @@ object CloudCodeQuotaService {
                             displayName = "Weekly Limit Remaining",
                             window = "weekly",
                             resetTime = weeklyReset,
-                            description = if (!weeklyReset.isNullOrBlank()) {
+                            description = if (!weeklyReset.isNullOrBlank() && weeklyFraction < 0.999) {
                                 "You have used some of your weekly limit, it will fully refresh in ${formatResetCountdown(weeklyReset)}."
                             } else {
                                 "Your individual tier weekly quota."
@@ -530,8 +544,10 @@ object CloudCodeQuotaService {
                             displayName = "Five Hour Limit Remaining",
                             window = "5h",
                             resetTime = fiveHourReset,
-                            description = if (!fiveHourReset.isNullOrBlank()) {
+                            description = if (!fiveHourReset.isNullOrBlank() && fiveHourFraction < 0.999) {
                                 "You have used some of your 5-hour limit, it will fully refresh in ${formatResetCountdown(fiveHourReset)}."
+                            } else if (fiveHourFraction >= 0.999) {
+                                "Your 5-hour limit is fully available."
                             } else {
                                 "Resets in 5 hours"
                             },
@@ -660,7 +676,10 @@ object CloudCodeQuotaService {
                         OAuthManager.refreshTokenIfNeeded(context)
                         val token = OAuthManager.getAccessToken(context)
                         if (!token.isNullOrBlank()) {
-                            modelsRespStr = makePostRequest(MODELS_URL, token)
+                            for (base in CLOUDCODE_BASES) {
+                                modelsRespStr = makePostRequest("$base$MODELS_PATH", token)
+                                if (!modelsRespStr.isNullOrBlank()) break
+                            }
                         }
                     } catch (e: Exception) {
                         Log.w(TAG, "Remote fetchAvailableModels retry failed: ${e.message}")
@@ -743,56 +762,42 @@ object CloudCodeQuotaService {
         val token = OAuthManager.getAccessToken(context)
 
         if (!token.isNullOrBlank()) {
-            try {
+            var candidateSummary: UserQuotaSummary? = null
 
-                val modelsRespStr = makePostRequest(MODELS_URL, token)
-                var geminiRemainingFraction: Double? = null
-                var geminiResetTime: String? = null
+            for (base in CLOUDCODE_BASES) {
+                try {
+                    val modelsUrl = "$base$MODELS_PATH"
+                    val quotaUrl = "$base$QUOTA_PATH"
 
-                if (modelsRespStr != null) {
-                    val modelsJson = JSONObject(modelsRespStr)
-                    if (modelsJson.has("models")) {
-                        val mObjMap = modelsJson.getJSONObject("models")
-                        val keys = mObjMap.keys()
-                        while (keys.hasNext()) {
-                            val mid = keys.next()
-                            val mObj = mObjMap.getJSONObject(mid)
-                            val providerRaw = mObj.optString("modelProvider", "")
-                            if (providerRaw == "MODEL_PROVIDER_GOOGLE" && mObj.has("quotaInfo")) {
-                                val qi = mObj.getJSONObject("quotaInfo")
-                                val isTarget = mid.contains("flash", ignoreCase = true) || mid.contains("pro", ignoreCase = true)
-                                if (isTarget) {
-                                    val rem = if (qi.has("remainingFraction")) qi.optDouble("remainingFraction") else 0.0
-                                    if (geminiRemainingFraction == null || rem < geminiRemainingFraction!!) {
-                                        geminiRemainingFraction = rem
-                                    }
-                                    if (qi.has("resetTime")) {
-                                        val rt = qi.optString("resetTime").takeIf { it.isNotBlank() }
-                                        if (rt != null && geminiResetTime == null) {
-                                            geminiResetTime = rt
-                                        }
-                                    }
-                                }
+                    val modelsRespStr = makePostRequest(modelsUrl, token)
+                    val quotaRespStr = makePostRequest(quotaUrl, token)
+
+                    if (quotaRespStr != null) {
+                        val summary = parseQuotaSummaryResponse(
+                            respStr = quotaRespStr,
+                            modelsRespStr = modelsRespStr,
+                            tier = tier,
+                            modelsFetchFailed = modelsRespStr == null
+                        )
+                        if (summary != null && summary.groups.isNotEmpty()) {
+                            val hasActiveUsage = summary.availableModels.any { it.remainingFraction != null && it.remainingFraction < 0.999 } ||
+                                    summary.groups.any { g -> g.buckets.any { it.remainingFraction < 0.999 } }
+                            Log.i(TAG, "Retrieved quota summary from $base (${summary.groups.size} groups, activeUsage=$hasActiveUsage)")
+                            if (hasActiveUsage || candidateSummary == null) {
+                                candidateSummary = summary
+                            }
+                            if (hasActiveUsage) {
+                                return@withContext summary
                             }
                         }
                     }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to load live quota from Google Cloud Code API ($base): ${e.message}")
                 }
+            }
 
-                val quotaRespStr = makePostRequest(QUOTA_URL, token)
-                if (quotaRespStr != null) {
-                    val summary = parseQuotaSummaryResponse(
-                        respStr = quotaRespStr,
-                        modelsRespStr = modelsRespStr,
-                        tier = tier,
-                        modelsFetchFailed = modelsRespStr == null
-                    )
-                    if (summary != null && summary.groups.isNotEmpty()) {
-                        Log.i(TAG, "Successfully loaded live quota from Google Cloud Code API for current token (${summary.groups.size} groups)")
-                        return@withContext summary
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to load live quota from Google Cloud Code API: ${e.message}")
+            if (candidateSummary != null) {
+                return@withContext candidateSummary
             }
         }
 
@@ -803,51 +808,55 @@ object CloudCodeQuotaService {
         OAuthManager.refreshTokenIfNeeded(context)
         val token = OAuthManager.getAccessToken(context) ?: return@withContext null
 
-        try {
-            val respStr = makePostRequest(TIER_URL, token) ?: return@withContext null
-            val json = JSONObject(respStr)
+        for (base in CLOUDCODE_BASES) {
+            try {
+                val tierUrl = "$base$TIER_PATH"
+                val respStr = makePostRequest(tierUrl, token) ?: continue
+                val json = JSONObject(respStr)
 
-            var curTier = TierInfo()
-            if (json.has("currentTier")) {
-                val cObj = json.getJSONObject("currentTier")
-                curTier = TierInfo(
-                    id = cObj.optString("id", ""),
-                    name = cObj.optString("name", "Gemini Code Assist"),
-                    description = cObj.optString("description", ""),
-                    upgradeSubscriptionUri = cObj.optString("upgradeSubscriptionUri", ""),
-                    upgradeSubscriptionText = cObj.optString("upgradeSubscriptionText", "")
-                )
-            } else if (json.has("allowedTiers")) {
-                val arr = json.getJSONArray("allowedTiers")
-                if (arr.length() > 0) {
-                    val cObj = arr.getJSONObject(0)
+                var curTier = TierInfo()
+                if (json.has("currentTier")) {
+                    val cObj = json.getJSONObject("currentTier")
                     curTier = TierInfo(
-                        id = cObj.optString("id", "standard-tier"),
+                        id = cObj.optString("id", ""),
                         name = cObj.optString("name", "Gemini Code Assist"),
                         description = cObj.optString("description", ""),
                         upgradeSubscriptionUri = cObj.optString("upgradeSubscriptionUri", ""),
                         upgradeSubscriptionText = cObj.optString("upgradeSubscriptionText", "")
                     )
+                } else if (json.has("allowedTiers")) {
+                    val arr = json.getJSONArray("allowedTiers")
+                    if (arr.length() > 0) {
+                        val cObj = arr.getJSONObject(0)
+                        curTier = TierInfo(
+                            id = cObj.optString("id", "standard-tier"),
+                            name = cObj.optString("name", "Gemini Code Assist"),
+                            description = cObj.optString("description", ""),
+                            upgradeSubscriptionUri = cObj.optString("upgradeSubscriptionUri", ""),
+                            upgradeSubscriptionText = cObj.optString("upgradeSubscriptionText", "")
+                        )
+                    }
                 }
-            }
 
-            var paidTier: TierInfo? = null
-            if (json.has("paidTier")) {
-                val pObj = json.getJSONObject("paidTier")
-                paidTier = TierInfo(
-                    id = pObj.optString("id", ""),
-                    name = pObj.optString("name", "Google AI Pro"),
-                    description = pObj.optString("description", ""),
-                    upgradeSubscriptionUri = pObj.optString("upgradeSubscriptionUri", ""),
-                    upgradeSubscriptionText = pObj.optString("upgradeSubscriptionText", "")
-                )
-            }
+                var paidTier: TierInfo? = null
+                if (json.has("paidTier")) {
+                    val pObj = json.getJSONObject("paidTier")
+                    paidTier = TierInfo(
+                        id = pObj.optString("id", ""),
+                        name = pObj.optString("name", "Google AI Pro"),
+                        description = pObj.optString("description", ""),
+                        upgradeSubscriptionUri = pObj.optString("upgradeSubscriptionUri", ""),
+                        upgradeSubscriptionText = pObj.optString("upgradeSubscriptionText", "")
+                    )
+                }
 
-            CodeAssistTier(currentTier = curTier, paidTier = paidTier)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error fetching code assist tier: ${e.message}", e)
-            null
+                return@withContext CodeAssistTier(currentTier = curTier, paidTier = paidTier)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching code assist tier from $base: ${e.message}", e)
+            }
         }
+
+        null
     }
 }
 

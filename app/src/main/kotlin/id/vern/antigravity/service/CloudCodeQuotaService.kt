@@ -341,8 +341,9 @@ object CloudCodeQuotaService {
         val seen = HashSet<String>()
         for (k in orderedIds) {
             if (k.isBlank() || !seen.add(k)) continue
-            if (k.startsWith("tab_", ignoreCase = true) || k.startsWith("chat_", ignoreCase = true) || k.contains("embedding", ignoreCase = true) || k.endsWith("-disabled", ignoreCase = true)) continue
             val mObj = modelsMap.optJSONObject(k) ?: continue
+            val title = modelTitle(mObj, k)
+            if (!AgyModelsService.isRealAiModel(k, title)) continue
             val tag = mObj.optString("tagTitle", "")
             val prov = modelProviderName(mObj)
             val qi = mObj.optJSONObject("quotaInfo")
@@ -353,7 +354,7 @@ object CloudCodeQuotaService {
             out.add(
                 AvailableModelInfo(
                     modelId = k,
-                    displayName = modelTitle(mObj, k),
+                    displayName = title,
                     provider = prov,
                     remainingFraction = rem,
                     resetTime = resetT,
@@ -369,12 +370,13 @@ object CloudCodeQuotaService {
         val seen = HashSet<String>()
         for (id in orderedIds) {
             if (id.isBlank() || !seen.add(id)) continue
-            if (id.startsWith("tab_", ignoreCase = true) || id.startsWith("chat_", ignoreCase = true) || id.contains("embedding", ignoreCase = true) || id.endsWith("-disabled", ignoreCase = true)) continue
             val mObj = modelsMap?.optJSONObject(id)
+            val title = if (mObj != null) modelTitle(mObj, id) else id
+            if (!AgyModelsService.isRealAiModel(id, title)) continue
             val tag = mObj?.optString("tagTitle", "") ?: ""
             if (tag.equals("Unavailable", ignoreCase = true)) continue
             val model = AgyModelsService.cliModelFromBackendEntry(id, mObj)
-            if (model != null) picker.add(model)
+            if (model != null && AgyModelsService.isRealAiModel(model.cliId, model.displayName)) picker.add(model)
         }
         return picker
     }

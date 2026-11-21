@@ -329,12 +329,12 @@ class AntigravityViewModel : ViewModel() {
     private val mutableSelectedModelCliId = MutableStateFlow<String?>(null)
     val selectedModelCliId: StateFlow<String?> = mutableSelectedModelCliId.asStateFlow()
 
-    fun refreshCliModels(context: Context) {
+    fun refreshCliModels(context: Context, force: Boolean = false) {
         viewModelScope.launch {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val lastFetch = prefs.getLong(KEY_CLI_MODELS_FETCHED_AT, 0L)
-            if (System.currentTimeMillis() - lastFetch < CLI_MODELS_THROTTLE_MS && mutableCliModels.value.isNotEmpty()) return@launch
-            val result = AgyModelsService.fetchCliModels(context)
+            if (!force && System.currentTimeMillis() - lastFetch < CLI_MODELS_THROTTLE_MS && mutableCliModels.value.isNotEmpty()) return@launch
+            val result = AgyModelsService.fetchCliModels(context, force = force)
             if (result.models.isNotEmpty()) {
                 adoptCliCatalog(context, result.models)
             } else {
@@ -682,11 +682,19 @@ class AntigravityViewModel : ViewModel() {
             if (success) {
                 mutableUserQuotaSummary.value = null
                 mutableCodeAssistTier.value = null
+                mutableCliModels.value = emptyList()
+                AgyModelsService.invalidateCache()
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit()
+                    .remove(KEY_CLI_MODELS_FETCHED_AT)
+                    .remove(KEY_CLI_MODELS_JSON)
+                    .remove(KEY_SELECTED_MODEL_CLI_ID)
+                    .apply()
                 refreshAuthState(context)
                 CloudCodeQuotaService.restartLocalLanguageServer(context)
                 restartCoreService(context)
                 refreshUserQuota(context)
-                refreshCliModels(context)
+                refreshCliModels(context, force = true)
             }
         }
     }
@@ -698,10 +706,20 @@ class AntigravityViewModel : ViewModel() {
                 refreshAuthState(context)
                 val currentActive = AccountManager.getActiveAccount(context)
                 if (currentActive != null) {
+                    mutableUserQuotaSummary.value = null
+                    mutableCodeAssistTier.value = null
+                    mutableCliModels.value = emptyList()
+                    AgyModelsService.invalidateCache()
+                    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    prefs.edit()
+                        .remove(KEY_CLI_MODELS_FETCHED_AT)
+                        .remove(KEY_CLI_MODELS_JSON)
+                        .remove(KEY_SELECTED_MODEL_CLI_ID)
+                        .apply()
                     CloudCodeQuotaService.restartLocalLanguageServer(context)
                     restartCoreService(context)
                     refreshUserQuota(context)
-                    refreshCliModels(context)
+                    refreshCliModels(context, force = true)
                 }
             }
         }

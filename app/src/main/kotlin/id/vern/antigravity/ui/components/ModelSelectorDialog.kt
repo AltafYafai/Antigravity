@@ -110,16 +110,17 @@ fun List<CliModel>.toDisplayAiModels(): List<DisplayAiModel> {
         val bare = variants.firstOrNull { it.effort.isEmpty() }
         val effortCliIds = variants.filter { it.effort.isNotEmpty() }
             .associate { it.effort to it.cliId }
+        val provider = first.provider.ifBlank { AgyModelsService.providerForDisplayName(first.displayName) }
         DisplayAiModel(
             id = first.displayName,
             name = first.displayName,
-            provider = first.provider,
+            provider = provider,
             description = "",
             descriptionRes = null,
-            iconRes = when (first.provider) {
-                "Google" -> R.drawable.ic_model_gemini
-                "Anthropic" -> R.drawable.ic_model_claude
-                "OpenAI" -> R.drawable.ic_model_gpt
+            iconRes = when {
+                provider.equals("Google", ignoreCase = true) || first.displayName.contains("Gemini", ignoreCase = true) -> R.drawable.ic_model_gemini
+                provider.equals("Anthropic", ignoreCase = true) || first.displayName.contains("Claude", ignoreCase = true) -> R.drawable.ic_model_claude
+                provider.equals("OpenAI", ignoreCase = true) || first.displayName.contains("GPT", ignoreCase = true) -> R.drawable.ic_model_gpt
                 else -> null
             },
             cliId = bare?.cliId,
@@ -134,13 +135,17 @@ internal fun getModelQuotaPercentage(
     summary: UserQuotaSummary?
 ): Pair<Int?, String?> {
     if (summary == null) return Pair(null, null)
+    val matchingAvail = summary.availableModels.firstOrNull { it.matches(modelId) }
+    if (matchingAvail != null && matchingAvail.percentage != null) {
+        return Pair(matchingAvail.percentage, null)
+    }
     val geminiGroup = summary.groups.firstOrNull { it.displayName.contains("gemini", ignoreCase = true) }
     val thirdPartyGroup = summary.groups.firstOrNull {
         it.displayName.contains("claude", ignoreCase = true) || it.displayName.contains("gpt", ignoreCase = true)
     }
 
     return when {
-        modelId.contains("Flash", ignoreCase = true) -> {
+        modelId.contains("Flash", ignoreCase = true) || modelId.contains("Neon", ignoreCase = true) -> {
             val fiveHB = geminiGroup?.buckets?.firstOrNull { it.window == "5h" || it.bucketId.contains("5h") }
             val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
             if (fiveHB != null && weeklyB != null) {
@@ -151,19 +156,11 @@ internal fun getModelQuotaPercentage(
                 Pair(b?.percentage, b?.subtext)
             }
         }
-        modelId.contains("Argon", ignoreCase = true) -> {
+        modelId.contains("Argon", ignoreCase = true) || modelId.contains("Carbon", ignoreCase = true) || modelId.contains("Gemini", ignoreCase = true) -> {
             val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
             Pair(weeklyB?.percentage, weeklyB?.subtext)
         }
-        modelId.contains("Carbon", ignoreCase = true) -> {
-            val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
-            Pair(weeklyB?.percentage, weeklyB?.subtext)
-        }
-        modelId.contains("Claude", ignoreCase = true) -> {
-            val b = thirdPartyGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
-            Pair(b?.percentage, b?.subtext)
-        }
-        modelId.contains("GPT", ignoreCase = true) -> {
+        modelId.contains("Claude", ignoreCase = true) || modelId.contains("GPT", ignoreCase = true) -> {
             val b = thirdPartyGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
             Pair(b?.percentage, b?.subtext)
         }
@@ -257,9 +254,10 @@ fun ModelSelectorDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     displayedModels.forEach { model ->
-                        val isSelected = model.id == selectedModel ||
-                                (model.id.startsWith("Claude") && selectedModel.startsWith("Claude") && model.id == selectedModel) ||
-                                (model.id.startsWith("GPT") && selectedModel.startsWith("GPT") && model.id == selectedModel)
+                        val isSelected = model.id.equals(selectedModel, ignoreCase = true) ||
+                                model.name.equals(selectedModel, ignoreCase = true) ||
+                                model.cliId == selectedModel ||
+                                model.effortCliIds.values.contains(selectedModel)
                         val quotaModel = remember(model.id, userQuotaSummary) {
                             userQuotaSummary?.availableModels?.firstOrNull { it.matches(model.id) }
                         }
@@ -267,16 +265,8 @@ fun ModelSelectorDialog(
                             getModelQuotaPercentage(model.id, userQuotaSummary)
                         }
 
-                        val activeTierType = codeAssistTier?.tierType ?: SubscriptionTierType.FREE
-                        val isModelTierAllowed = when {
-                            model.name.contains("Argon", ignoreCase = true) || model.name.contains("Neon", ignoreCase = true) || model.name.contains("Carbon", ignoreCase = true) -> activeTierType == SubscriptionTierType.ULTRA
-                            model.name.contains("Claude", ignoreCase = true) || model.name.contains("GPT", ignoreCase = true) -> activeTierType != SubscriptionTierType.FREE
-                            else -> true
-                        }
                         val modelAvailability = quotaModel?.availability ?: ModelAvailability.UNKNOWN
-                        val isAvailableForAccount = (modelAvailability != ModelAvailability.UNAVAILABLE) && isModelTierAllowed
-                        val requiresPro = !isModelTierAllowed && (model.name.contains("Claude", ignoreCase = true) || model.name.contains("GPT", ignoreCase = true))
-                        val requiresUltra = !isModelTierAllowed && (model.name.contains("Argon", ignoreCase = true) || model.name.contains("Neon", ignoreCase = true) || model.name.contains("Carbon", ignoreCase = true))
+                        val isAvailableForAccount = modelAvailability != ModelAvailability.UNAVAILABLE
 
                         Card(
                             shape = RoundedCornerShape(10.dp),
@@ -293,18 +283,6 @@ fun ModelSelectorDialog(
                                 .clickable {
                                     if (isAvailableForAccount) {
                                         onModelSelected(model.id, selectedThinking, model.cliIdFor(selectedThinking))
-                                    } else if (requiresUltra) {
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.model_toast_requires_ultra, model.name),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    } else if (requiresPro) {
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.model_toast_requires_pro, model.name),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
                                     } else {
                                         Toast.makeText(
                                             context,
@@ -363,11 +341,7 @@ fun ModelSelectorDialog(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                                 Spacer(modifier = Modifier.width(3.dp))
-                                                val lockLabel = when {
-                                                    requiresUltra -> stringResource(R.string.model_status_requires_ultra)
-                                                    requiresPro -> stringResource(R.string.model_status_requires_pro)
-                                                    else -> stringResource(R.string.model_status_unavailable_account)
-                                                }
+                                                val lockLabel = stringResource(R.string.model_status_unavailable_account)
                                                 Text(
                                                     text = lockLabel,
                                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),

@@ -1671,6 +1671,7 @@ fun ChatScreen(
     if (showModelSelector) {
         LaunchedEffect(Unit) {
             viewModel.refreshUserQuota(context)
+            viewModel.refreshCliModels(context)
         }
         ModelSelectorDialog(
             selectedModel = selectedModel,

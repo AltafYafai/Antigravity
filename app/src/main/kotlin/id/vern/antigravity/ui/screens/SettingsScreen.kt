@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
 import id.vern.antigravity.oauth.OAuthManager
+import id.vern.antigravity.service.AgyModelsService
 import id.vern.antigravity.service.RuleItem
 import id.vern.antigravity.service.McpServerItem
 import id.vern.antigravity.ui.components.InstallationProgressDialog
@@ -1939,35 +1940,30 @@ fun ModelsAndUsageSettingsPage(
             val availableModels = userQuotaSummary?.availableModels ?: emptyList()
             val effectiveModels = remember(availableModels, cliModels) {
                 if (cliModels.isNotEmpty()) {
-                    cliModels.map { cli ->
-                        val matchingAvail = availableModels.firstOrNull { avail ->
-                            avail.modelId.equals(cli.cliId, ignoreCase = true) ||
-                            avail.displayName.equals(cli.label, ignoreCase = true) ||
-                            avail.displayName.equals(cli.displayName, ignoreCase = true) ||
-                            avail.matches(cli.cliId)
+                    cliModels
+                        .filter { AgyModelsService.isRealAiModel(it.cliId, it.displayName) }
+                        .map { cli ->
+                            val matchingAvail = availableModels.firstOrNull { avail ->
+                                avail.modelId.equals(cli.cliId, ignoreCase = true) ||
+                                avail.displayName.equals(cli.label, ignoreCase = true) ||
+                                avail.displayName.equals(cli.displayName, ignoreCase = true) ||
+                                avail.matches(cli.cliId)
+                            }
+                            val pct = matchingAvail?.percentage ?: getModelQuotaPercentage(cli.cliId, userQuotaSummary).first
+                            val resetT = matchingAvail?.resetTime
+                            val availStatus = matchingAvail?.availability ?: ModelAvailability.AVAILABLE
+                            AvailableModelInfo(
+                                modelId = cli.cliId,
+                                displayName = cli.label.ifBlank { cli.displayName },
+                                provider = cli.provider.ifBlank { AgyModelsService.providerForDisplayName(cli.displayName).ifBlank { "Google" } },
+                                remainingFraction = pct?.let { it / 100.0 },
+                                resetTime = resetT,
+                                availability = availStatus
+                            )
                         }
-                        val pct = matchingAvail?.percentage ?: getModelQuotaPercentage(cli.cliId, userQuotaSummary).first
-                        val resetT = matchingAvail?.resetTime
-                        val availStatus = matchingAvail?.availability ?: ModelAvailability.AVAILABLE
-                        AvailableModelInfo(
-                            modelId = cli.cliId,
-                            displayName = cli.label.ifBlank { cli.displayName },
-                            provider = cli.provider.ifBlank { "Google" },
-                            remainingFraction = pct?.let { it / 100.0 },
-                            resetTime = resetT,
-                            availability = availStatus
-                        )
-                    }
                 } else {
                     availableModels
-                        .filter {
-                            it.displayName.isNotBlank() &&
-                            !it.displayName.startsWith("chat_", ignoreCase = true) &&
-                            !it.displayName.startsWith("tab_", ignoreCase = true) &&
-                            !it.modelId.startsWith("chat_", ignoreCase = true) &&
-                            !it.modelId.startsWith("tab_", ignoreCase = true) &&
-                            !it.modelId.contains("embedding", ignoreCase = true)
-                        }
+                        .filter { AgyModelsService.isRealAiModel(it.modelId, it.displayName) }
                 }
             }
 

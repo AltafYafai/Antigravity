@@ -305,92 +305,102 @@ migrations:  {
         }
     }
 
-    fun getUserEmail(context: Context): String? {
-        val file = tokenFile(context)
-        if (!file.isFile) return null
+    data class TokenProfile(
+        val email: String?,
+        val name: String?,
+        val picture: String?
+    )
+
+    fun parseProfileFromTokenJson(tokenJson: String): TokenProfile {
+        if (tokenJson.isBlank()) return TokenProfile(null, null, null)
         return try {
-            val content = file.readText(Charsets.UTF_8)
-            val json = JSONObject(content)
-            if (json.has("id_token")) {
-                val idToken = json.getString("id_token")
+            val root = JSONObject(tokenJson)
+            val tokenObj = root.optJSONObject("token")
+            val idToken = when {
+                root.has("id_token") && root.optString("id_token").isNotBlank() -> root.optString("id_token")
+                tokenObj != null && tokenObj.has("id_token") && tokenObj.optString("id_token").isNotBlank() -> tokenObj.optString("id_token")
+                else -> null
+            }
+            var email: String? = null
+            var name: String? = null
+            var picture: String? = null
+
+            if (!idToken.isNullOrBlank()) {
                 val parts = idToken.split(".")
                 if (parts.size >= 2) {
-                    val payload = String(Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), StandardCharsets.UTF_8)
-                    val payloadJson = JSONObject(payload)
-                    if (payloadJson.has("email")) {
-                        return payloadJson.getString("email")
-                    }
+                    val payloadStr = String(
+                        Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
+                        StandardCharsets.UTF_8
+                    )
+                    val jwt = JSONObject(payloadStr)
+                    email = jwt.optString("email").takeIf { it.isNotBlank() }
+                    name = jwt.optString("name").takeIf { it.isNotBlank() }
+                    picture = jwt.optString("picture").takeIf { it.isNotBlank() }
                 }
             }
-            if (json.has("email")) json.getString("email") else null
+
+            if (email.isNullOrBlank()) {
+                email = when {
+                    root.has("email") && root.optString("email").isNotBlank() -> root.optString("email")
+                    tokenObj != null && tokenObj.has("email") && tokenObj.optString("email").isNotBlank() -> tokenObj.optString("email")
+                    else -> null
+                }
+            }
+            if (name.isNullOrBlank()) {
+                name = when {
+                    root.has("name") && root.optString("name").isNotBlank() -> root.optString("name")
+                    tokenObj != null && tokenObj.has("name") && tokenObj.optString("name").isNotBlank() -> tokenObj.optString("name")
+                    else -> null
+                }
+            }
+            if (picture.isNullOrBlank()) {
+                picture = when {
+                    root.has("picture") && root.optString("picture").isNotBlank() -> root.optString("picture")
+                    tokenObj != null && tokenObj.has("picture") && tokenObj.optString("picture").isNotBlank() -> tokenObj.optString("picture")
+                    else -> null
+                }
+            }
+
+            TokenProfile(email = email, name = name, picture = picture)
+        } catch (e: Exception) {
+            TokenProfile(email = null, name = null, picture = null)
+        }
+    }
+
+    fun getUserEmail(context: Context): String? {
+        val file = tokenFile(context)
+        if (!file.isFile || file.length() == 0L) return null
+        return try {
+            val content = file.readText(Charsets.UTF_8)
+            parseProfileFromTokenJson(content).email
         } catch (e: Exception) {
             null
         }
     }
 
     fun getUserName(context: Context): String? {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val cached = prefs.getString(KEY_USER_NAME, null)
-        if (!cached.isNullOrBlank()) return cached
-
         val file = tokenFile(context)
         if (!file.isFile || file.length() == 0L) return null
         return try {
             val content = file.readText(Charsets.UTF_8)
-            val json = JSONObject(content)
-            if (json.has("name") && json.getString("name").isNotBlank()) {
-                val n = json.getString("name")
-                prefs.edit().putString(KEY_USER_NAME, n).apply()
-                return n
-            }
-            if (json.has("id_token")) {
-                val idToken = json.getString("id_token")
-                val parts = idToken.split(".")
-                if (parts.size >= 2) {
-                    val payload = String(Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), StandardCharsets.UTF_8)
-                    val payloadJson = JSONObject(payload)
-                    if (payloadJson.has("name") && payloadJson.getString("name").isNotBlank()) {
-                        val n = payloadJson.getString("name")
-                        prefs.edit().putString(KEY_USER_NAME, n).apply()
-                        return n
-                    }
-                }
-            }
-            null
+            val parsedName = parseProfileFromTokenJson(content).name
+            if (!parsedName.isNullOrBlank()) return parsedName
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.getString(KEY_USER_NAME, null)
         } catch (e: Exception) {
             null
         }
     }
 
     fun getUserPicture(context: Context): String? {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val cached = prefs.getString(KEY_USER_PICTURE, null)
-        if (!cached.isNullOrBlank()) return cached
-
         val file = tokenFile(context)
         if (!file.isFile || file.length() == 0L) return null
         return try {
             val content = file.readText(Charsets.UTF_8)
-            val json = JSONObject(content)
-            if (json.has("picture") && json.getString("picture").isNotBlank()) {
-                val pic = json.getString("picture")
-                prefs.edit().putString(KEY_USER_PICTURE, pic).apply()
-                return pic
-            }
-            if (json.has("id_token")) {
-                val idToken = json.getString("id_token")
-                val parts = idToken.split(".")
-                if (parts.size >= 2) {
-                    val payload = String(Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), StandardCharsets.UTF_8)
-                    val payloadJson = JSONObject(payload)
-                    if (payloadJson.has("picture") && payloadJson.getString("picture").isNotBlank()) {
-                        val pic = payloadJson.getString("picture")
-                        prefs.edit().putString(KEY_USER_PICTURE, pic).apply()
-                        return pic
-                    }
-                }
-            }
-            null
+            val parsedPic = parseProfileFromTokenJson(content).picture
+            if (!parsedPic.isNullOrBlank()) return parsedPic
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.getString(KEY_USER_PICTURE, null)
         } catch (e: Exception) {
             null
         }
@@ -447,6 +457,9 @@ migrations:  {
 
                 if (!name.isNullOrBlank() || !picture.isNullOrBlank()) {
                     updateTokenFileMetadata(context, name, picture)
+                    if (!email.isNullOrBlank()) {
+                        AccountManager.updateAccountProfile(context, email, name, picture)
+                    }
                 }
 
                 UserInfoResult(name = name, picture = picture, email = email)
@@ -506,19 +519,17 @@ migrations:  {
     fun saveTokenJson(context: Context, tokenJson: String) {
         invalidateCache()
         val allTargets = getAllTokenTargets(context).toMutableList()
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val cachedName = prefs.getString(KEY_USER_NAME, null)
-        val cachedPicture = prefs.getString(KEY_USER_PICTURE, null)
+        val profile = parseProfileFromTokenJson(tokenJson)
 
         val finalJsonStr = try {
             val json = JSONObject(tokenJson)
             var modified = false
-            if (!cachedName.isNullOrBlank() && !json.has("name")) {
-                json.put("name", cachedName)
+            if (!profile.name.isNullOrBlank() && !json.has("name")) {
+                json.put("name", profile.name)
                 modified = true
             }
-            if (!cachedPicture.isNullOrBlank() && !json.has("picture")) {
-                json.put("picture", cachedPicture)
+            if (!profile.picture.isNullOrBlank() && !json.has("picture")) {
+                json.put("picture", profile.picture)
                 modified = true
             }
             if (modified) json.toString(2) else tokenJson
@@ -535,10 +546,17 @@ migrations:  {
             } catch (e: Exception) {}
         }
         syncCompanionStateFiles(context)
-        val email = getUserEmail(context)
-        val name = getUserName(context) ?: email?.substringBefore("@") ?: ""
-        val pic = getUserPicture(context)
+        val email = profile.email ?: getUserEmail(context)
+        val name = profile.name ?: getUserName(context) ?: email?.substringBefore("@") ?: ""
+        val pic = profile.picture ?: getUserPicture(context)
         if (!email.isNullOrBlank()) {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString(KEY_USER_EMAIL, email)
+                .putString(KEY_USER_NAME, name)
+                .putString(KEY_USER_PICTURE, pic)
+                .apply()
+
             AccountManager.saveOrUpdateAccount(
                 context = context,
                 email = email,

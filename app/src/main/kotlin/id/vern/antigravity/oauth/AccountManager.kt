@@ -46,15 +46,31 @@ object AccountManager {
             val root = JSONObject(content)
             val arr = root.optJSONArray("accounts") ?: return emptyList()
             val list = mutableListOf<StoredAccount>()
+            var needsPersist = false
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
                 val id = obj.optString("id")
                 val email = obj.optString("email")
-                val name = obj.optString("name")
-                val picture = obj.optString("picture").takeIf { it.isNotBlank() }
+                var name = obj.optString("name")
+                var picture = obj.optString("picture").takeIf { it.isNotBlank() }
                 val tokenJson = obj.optString("tokenJson")
                 val tier = obj.optString("tier", "FREE")
                 val lastUsedAt = obj.optLong("lastUsedAt", System.currentTimeMillis())
+
+                if (tokenJson.isNotBlank()) {
+                    val profile = OAuthManager.parseProfileFromTokenJson(tokenJson)
+                    val realName = profile.name?.takeIf { it.isNotBlank() }
+                    val realPic = profile.picture?.takeIf { it.isNotBlank() }
+                    if (realName != null && realName != name) {
+                        name = realName
+                        needsPersist = true
+                    }
+                    if (realPic != null && realPic != picture) {
+                        picture = realPic
+                        needsPersist = true
+                    }
+                }
+
                 if (id.isNotBlank() && email.isNotBlank()) {
                     list.add(
                         StoredAccount(
@@ -68,6 +84,10 @@ object AccountManager {
                         )
                     )
                 }
+            }
+            if (needsPersist) {
+                val activeId = root.optString("activeAccountId").takeIf { it.isNotBlank() }
+                persist(context, activeId, list)
             }
             list.sortedByDescending { it.lastUsedAt }
         } catch (e: Exception) {
@@ -160,6 +180,20 @@ object AccountManager {
         val activeId = if (makeActive) email else (getActiveAccountId(context) ?: email)
         persist(context, activeId, current)
         stored
+    }
+
+    fun updateAccountProfile(context: Context, email: String, name: String?, picture: String?) = synchronized(lock) {
+        val current = getAccounts(context).toMutableList()
+        val index = current.indexOfFirst { it.email.equals(email, ignoreCase = true) }
+        if (index >= 0) {
+            val item = current[index]
+            val updated = item.copy(
+                name = name?.takeIf { it.isNotBlank() } ?: item.name,
+                picture = picture?.takeIf { it.isNotBlank() } ?: item.picture
+            )
+            current[index] = updated
+            persist(context, getActiveAccountId(context), current)
+        }
     }
 
     fun updateAccountTier(context: Context, email: String, tier: String) = synchronized(lock) {

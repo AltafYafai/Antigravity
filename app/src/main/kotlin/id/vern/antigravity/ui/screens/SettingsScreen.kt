@@ -3586,10 +3586,17 @@ fun AccountSettingsPage(
                                     }
                                 }
                             }
+                            if (!userEmail.isNullOrBlank()) {
+                                Text(
+                                    text = userEmail ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Text(
                                 text = if (userEmail != null) stringResource(R.string.status_authenticated) else stringResource(R.string.account_not_authenticated),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (userEmail != null) AntigravityGreen else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -3750,6 +3757,10 @@ fun AccountSettingsPage(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
+                val otherAccounts = remember(accounts, userEmail) {
+                    accounts.filter { !it.email.equals(userEmail, ignoreCase = true) }
+                }
+
                 SettingsCard {
                     Column(
                         modifier = Modifier
@@ -3757,118 +3768,93 @@ fun AccountSettingsPage(
                             .padding(16.dp)
                             .animateContentSize()
                     ) {
-                        accounts.forEachIndexed { idx, acc ->
-                            val isActive = acc.email.equals(userEmail, ignoreCase = true)
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable(enabled = !isActive) {
-                                        viewModel.switchAccount(context, acc.id)
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.account_switched_toast, acc.email),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                    .padding(vertical = 8.dp, horizontal = 4.dp)
-                            ) {
-                                Box(
+                        if (otherAccounts.isNotEmpty()) {
+                            otherAccounts.forEachIndexed { idx, acc ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isActive) AntigravityBlue else MaterialTheme.colorScheme.surfaceVariant),
-                                    contentAlignment = Alignment.Center
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            viewModel.switchAccount(context, acc.id)
+                                            Toast.makeText(
+                                                context,
+                                                context.getString(R.string.account_switched_toast, acc.email),
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                        .padding(vertical = 8.dp, horizontal = 4.dp)
                                 ) {
-                                    if (!acc.picture.isNullOrBlank()) {
-                                        AsyncImage(
-                                            model = acc.picture,
-                                            contentDescription = acc.name,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        Text(
-                                            text = acc.name.take(1).uppercase().ifBlank { "U" },
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp,
-                                            color = if (isActive) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.width(12.dp))
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = acc.name.ifBlank { acc.email },
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Surface(
-                                            shape = RoundedCornerShape(10.dp),
-                                            color = when (acc.tierType) {
-                                                SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
-                                                SubscriptionTierType.PRO -> AntigravityBlue.copy(alpha = 0.15f)
-                                                SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
-                                                else -> MaterialTheme.colorScheme.surfaceVariant
-                                            }
-                                        ) {
-                                            Text(
-                                                text = when (acc.tierType) {
-                                                    SubscriptionTierType.ULTRA -> stringResource(R.string.account_tier_ultra)
-                                                    SubscriptionTierType.PRO -> stringResource(R.string.account_tier_pro)
-                                                    SubscriptionTierType.ENTERPRISE -> stringResource(R.string.account_tier_enterprise)
-                                                    else -> stringResource(R.string.account_tier_free)
-                                                },
-                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                                fontWeight = FontWeight.Bold,
-                                                color = when (acc.tierType) {
-                                                    SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary
-                                                    SubscriptionTierType.PRO -> AntigravityBlue
-                                                    SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary
-                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                                },
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = acc.email,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-
-                                if (isActive) {
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = AntigravityGreen.copy(alpha = 0.15f)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                                        contentAlignment = Alignment.Center
                                     ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = null,
-                                                tint = AntigravityGreen,
-                                                modifier = Modifier.size(12.dp)
+                                        if (!acc.picture.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = acc.picture,
+                                                contentDescription = acc.name,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
                                             )
-                                            Spacer(modifier = Modifier.width(4.dp))
+                                        } else {
                                             Text(
-                                                text = stringResource(R.string.account_active_badge),
-                                                style = MaterialTheme.typography.labelSmall,
+                                                text = acc.name.take(1).uppercase().ifBlank { "U" },
                                                 fontWeight = FontWeight.Bold,
-                                                color = AntigravityGreen
+                                                fontSize = 14.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                     }
-                                } else {
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = acc.name.ifBlank { acc.email },
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Medium,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = when (acc.tierType) {
+                                                    SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
+                                                    SubscriptionTierType.PRO -> AntigravityBlue.copy(alpha = 0.15f)
+                                                    SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
+                                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                                }
+                                            ) {
+                                                Text(
+                                                    text = when (acc.tierType) {
+                                                        SubscriptionTierType.ULTRA -> stringResource(R.string.account_tier_ultra)
+                                                        SubscriptionTierType.PRO -> stringResource(R.string.account_tier_pro)
+                                                        SubscriptionTierType.ENTERPRISE -> stringResource(R.string.account_tier_enterprise)
+                                                        else -> stringResource(R.string.account_tier_free)
+                                                    },
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = when (acc.tierType) {
+                                                        SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary
+                                                        SubscriptionTierType.PRO -> AntigravityBlue
+                                                        SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary
+                                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                    },
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = acc.email,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
                                     IconButton(
                                         onClick = {
                                             viewModel.removeAccount(context, acc.id)
@@ -3883,14 +3869,16 @@ fun AccountSettingsPage(
                                         )
                                     }
                                 }
+
+                                if (idx < otherAccounts.size - 1) {
+                                    HorizontalDivider(
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f),
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    )
+                                }
                             }
 
-                            if (idx < accounts.size - 1) {
-                                HorizontalDivider(
-                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f),
-                                    modifier = Modifier.padding(vertical = 4.dp)
-                                )
-                            }
+                            Spacer(modifier = Modifier.height(10.dp))
                         }
 
                         Spacer(modifier = Modifier.height(10.dp))

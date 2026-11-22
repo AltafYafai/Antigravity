@@ -5111,6 +5111,24 @@ fun AboutSettingsPage(
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))
+                    Button(
+                        onClick = { viewModel.checkForOtaUpdates(context, isManualCheck = true) },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.about_check_updates_btn),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f))
                     Spacer(modifier = Modifier.height(12.dp))
 
@@ -5154,13 +5172,42 @@ fun AboutSettingsPage(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = stringResource(R.string.about_btn_repo_antigravity),
+                                text = stringResource(R.string.about_btn_repo_upstream),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 textAlign = TextAlign.Center
                             )
                         }
+                        OutlinedButton(
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/AltafYafai/Antigravity"))
+                                context.startActivity(intent)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Terminal,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = stringResource(R.string.about_btn_repo_fork),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         OutlinedButton(
                             onClick = {
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/KuatoDev/antigravity-bootstrap"))
@@ -5186,7 +5233,7 @@ fun AboutSettingsPage(
                         }
                         OutlinedButton(
                             onClick = {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/KuatoDev/antigravity-catalogue"))
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/AltafYafai/antigravity-catalogue"))
                                 context.startActivity(intent)
                             },
                             shape = RoundedCornerShape(8.dp),
@@ -5263,6 +5310,7 @@ fun AboutSettingsPage(
 
                     val contributors = listOf(
                         Pair(R.string.about_contrib_vern_title, R.string.about_contrib_vern_desc),
+                        Pair(R.string.about_contrib_altaf_title, R.string.about_contrib_altaf_desc),
                         Pair(R.string.about_contrib_werdik_title, R.string.about_contrib_werdik_desc),
                         Pair(R.string.about_contrib_termux_title, R.string.about_contrib_termux_desc),
                         Pair(R.string.about_contrib_deepmind_title, R.string.about_contrib_deepmind_desc)

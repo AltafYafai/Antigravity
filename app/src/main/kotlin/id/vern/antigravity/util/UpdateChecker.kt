@@ -66,6 +66,15 @@ class UpdateChecker(private val context: Context) {
 
         var foundReleaseObj: JSONObject? = null
 
+        fun hasApkAsset(release: JSONObject): Boolean {
+            val assets = release.optJSONArray("assets") ?: return false
+            for (i in 0 until assets.length()) {
+                val name = assets.optJSONObject(i)?.optString("name", "") ?: ""
+                if (name.endsWith(".apk", ignoreCase = true)) return true
+            }
+            return false
+        }
+
         for (owner in candidateOwners) {
             val latestUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
             val (codeLatest, bodyLatest) = fetchGitHubApi(latestUrl)
@@ -73,7 +82,7 @@ class UpdateChecker(private val context: Context) {
             if (codeLatest == HttpURLConnection.HTTP_OK && !bodyLatest.isNullOrBlank()) {
                 try {
                     val obj = JSONObject(bodyLatest)
-                    if (obj.has("tag_name")) {
+                    if (obj.has("tag_name") && hasApkAsset(obj)) {
                         foundReleaseObj = obj
                         break
                     }
@@ -89,7 +98,7 @@ class UpdateChecker(private val context: Context) {
                     val array = JSONArray(bodyList)
                     for (i in 0 until array.length()) {
                         val r = array.getJSONObject(i)
-                        if (!r.optBoolean("draft", false)) {
+                        if (!r.optBoolean("draft", false) && hasApkAsset(r)) {
                             foundReleaseObj = r
                             break
                         }

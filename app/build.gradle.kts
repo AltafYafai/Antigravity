@@ -21,12 +21,17 @@ android {
     namespace = "id.vern.antigravity"
     compileSdk = 36
 
+    val runNumber = (project.findProperty("buildNumber") as? String)
+        ?: System.getenv("GITHUB_RUN_NUMBER")
+        ?: "4"
+    val baseVersion = "1.0.1"
+
     defaultConfig {
         applicationId = "id.vern.antigravity"
         minSdk = 26
         targetSdk = 28
-        versionCode = 4
-        versionName = "1.0.0-4"
+        versionCode = runNumber.toIntOrNull() ?: 4
+        versionName = "$baseVersion-$runNumber"
 
         vectorDrawables {
             useSupportLibrary = true

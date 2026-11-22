@@ -68,8 +68,10 @@ Jika Antigravity for Android bermanfaat untuk Anda dan ingin mendukung pengemban
 
 </div>
 
-## Credits
+## Penulis & Kredit
 
+- **[Vern (KuatoDev)](https://github.com/KuatoDev)** — Pembuat asli dan pengembang utama Antigravity untuk Android.
+- **[Altaf Yafai (AltafYafai)](https://github.com/AltafYafai)** — Pengelola fork, bridge sinkronisasi kuota, penemuan Language Server RPC, distribusi pembaruan OTA, dan release engineering.
 - **[Werdik (werdio325-png)](https://github.com/werdio325-png)** — `pkg`, `agy-daemon`, dan script userspace.
 - **[Termux](https://github.com/termux)** — Base rootfs ARM64 dan `libtermux-exec`.
 - **[Google DeepMind](https://deepmind.google)** — Binary inti `language_server` Antigravity.

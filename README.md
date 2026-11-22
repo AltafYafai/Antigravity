@@ -68,8 +68,10 @@ If you find Antigravity for Android useful and want to support its development, 
 
 </div>
 
-## Credits
+## Authors & Credits
 
+- **[Vern (KuatoDev)](https://github.com/KuatoDev)** — Original creator and lead developer of Antigravity for Android.
+- **[Altaf Yafai (AltafYafai)](https://github.com/AltafYafai)** — Fork maintainer, quota synchronization bridge, Language Server RPC discovery, OTA update distribution, and CI/CD release engineering.
 - **[Werdik (werdio325-png)](https://github.com/werdio325-png)** — `pkg`, `agy-daemon`, and userspace scripts.
 - **[Termux](https://github.com/termux)** — Android ARM64 rootfs base and `libtermux-exec`.
 - **[Google DeepMind](https://deepmind.google)** — Antigravity core `language_server`.

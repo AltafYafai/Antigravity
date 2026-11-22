@@ -36,7 +36,50 @@ object RuleConfigService {
         return def
     }
 
+    fun ensureDefaultGlobalRules(context: Context) {
+        val configDirs = getCandidateBaseDirs(context)
+        for (configDir in configDirs) {
+            try {
+                val globalAgents = File(configDir, "AGENTS.md")
+                if (!globalAgents.exists() || globalAgents.length() == 0L) {
+                    globalAgents.parentFile?.mkdirs()
+                    globalAgents.writeText(
+                        """
+                        # Antigravity Global Agent Instructions & Standards
+
+                        ## Non-Interactive Terminal & CLI Guidelines
+                        - NEVER run interactive CLI authentication commands (e.g., `gh auth login` without `--with-token`).
+                        - Interactive commands will stall and fail because execution runs non-interactively without TTY input.
+                        - To connect GitHub, check `gh auth status`. If not authenticated, inform the user:
+                          "Please connect your GitHub account in Settings → Account → GitHub Account (supports instant Device Code or Personal Access Token), or provide a token using: echo '<TOKEN>' | gh auth login --with-token"
+
+                        ## Git & Repository Hygiene
+                        - Always use non-interactive flags for git/gh commands.
+                        - Keep commits atomic and use Conventional Commits format (`feat:`, `fix:`, `refactor:`, `chore:`).
+                        """.trimIndent() + "\n",
+                        Charsets.UTF_8
+                    )
+                } else {
+                    val content = globalAgents.readText(Charsets.UTF_8)
+                    if (!content.contains("gh auth login")) {
+                        globalAgents.appendText(
+                            """
+
+                            ## GitHub CLI & Non-Interactive Safety
+                            - NEVER run interactive CLI commands like `gh auth login` without `--with-token`.
+                            - Advise the user to connect via Settings → Account → GitHub Account or use `echo '<token>' | gh auth login --with-token`.
+                            """.trimIndent() + "\n"
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed ensuring default global rules: ${e.message}")
+            }
+        }
+    }
+
     suspend fun loadAllRules(context: Context, workspacePath: String?): List<RuleItem> = withContext(Dispatchers.IO) {
+        ensureDefaultGlobalRules(context)
         val rules = mutableListOf<RuleItem>()
         val configDir = getPrimaryConfigDir(context)
 

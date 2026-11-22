@@ -150,6 +150,27 @@
     <string name="account_token_copied">Access token copied to clipboard</string>
     <string name="account_btn_models_usage">Models &amp; Usage</string>
 
+    <string name="github_account_title">GitHub Account</string>
+    <string name="github_account_subtitle">Connect your GitHub profile for Git sync, repo cloning, and GitHub CLI tools.</string>
+    <string name="github_not_connected">Not connected</string>
+    <string name="github_connected">Connected</string>
+    <string name="github_btn_connect">Connect GitHub</string>
+    <string name="github_btn_sign_out">Disconnect GitHub</string>
+    <string name="github_btn_test_connection">Verify Token</string>
+    <string name="github_dialog_title">Connect GitHub</string>
+    <string name="github_tab_device_code">Device Code</string>
+    <string name="github_tab_token">Personal Access Token</string>
+    <string name="github_device_code_desc">Open GitHub in your browser and enter the code below to sign in directly without generating a token.</string>
+    <string name="github_device_code_copy_open">Copy Code &amp; Open GitHub</string>
+    <string name="github_device_code_waiting">Waiting for authorization on GitHub...</string>
+    <string name="github_pat_desc">Generate a Personal Access Token with repo, read:org, workflow, and gist scopes.</string>
+    <string name="github_btn_generate_token">Generate Token on GitHub</string>
+    <string name="github_pat_placeholder">Paste token (ghp_...)</string>
+    <string name="github_btn_connect_pat">Save &amp; Connect</string>
+    <string name="github_toast_connected">GitHub connected successfully as @%1$s</string>
+    <string name="github_toast_disconnected">GitHub disconnected</string>
+    <string name="github_toast_error">GitHub authentication failed: %1$s</string>
+
     <string name="chat_new_conversation">New Conversation</string>
 
     <string name="model_btn_view_usage">View Usage Limits</string>

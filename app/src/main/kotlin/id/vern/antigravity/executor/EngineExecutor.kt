@@ -455,6 +455,15 @@ object EngineExecutor {
                 }
             }
 
+            if (!targetHosts.exists() || targetHosts.length() == 0L) {
+                try {
+                    val user = id.vern.antigravity.oauth.GitHubAuthManager.getStoredUser(context)
+                    if (user != null && user.token.isNotBlank()) {
+                        id.vern.antigravity.oauth.GitHubAuthManager.saveCredentials(context, user)
+                    }
+                } catch (e: Exception) {}
+            }
+
             if (targetHosts.isFile && targetHosts.length() > 0) {
                 val content = targetHosts.readText(Charsets.UTF_8)
                 val tokenRegex = Regex("""oauth_token:\s*([^\s]+)""")
@@ -467,6 +476,12 @@ object EngineExecutor {
                     }
                 }
             }
+
+            // Ensure non-interactive execution for gh and git so CLI processes never hang waiting for stdin
+            env?.set("GH_PROMPT_DISABLED", "1")
+            env?.set("GH_NO_UPDATE_NOTIFIER", "1")
+            env?.set("GIT_TERMINAL_PROMPT", "0")
+            env?.set("CI", "1")
 
             val gitConfigCandidates = mutableListOf<File>()
             if (downloadDir != null) {

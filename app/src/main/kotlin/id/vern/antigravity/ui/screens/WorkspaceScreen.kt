@@ -63,6 +63,7 @@ import id.vern.antigravity.data.OpenTab
 import id.vern.antigravity.ui.components.CodeEditor
 import id.vern.antigravity.ui.components.DiffViewer
 import id.vern.antigravity.ui.components.FileTree
+import id.vern.antigravity.ui.components.GitHubSignInDialog
 import id.vern.antigravity.ui.components.ModelSelectorDialog
 import id.vern.antigravity.ui.components.TerminalView
 import id.vern.antigravity.viewmodel.AntigravityViewModel
@@ -93,6 +94,13 @@ fun WorkspaceScreen(
     val cliModels by viewModel.cliModels.collectAsStateWithLifecycle()
     val quotaErrorMessage by viewModel.quotaErrorMessage.collectAsStateWithLifecycle()
     var showModelDialog by remember { mutableStateOf(false) }
+
+    val showGitHubSignInDialog by viewModel.showGitHubSignInDialog.collectAsStateWithLifecycle()
+    val gitHubUser by viewModel.gitHubUser.collectAsStateWithLifecycle()
+    val gitHubDeviceCodeInfo by viewModel.gitHubDeviceCodeInfo.collectAsStateWithLifecycle()
+    val isGitHubAuthenticating by viewModel.isGitHubAuthenticating.collectAsStateWithLifecycle()
+    val gitHubAuthStatusText by viewModel.gitHubAuthStatusText.collectAsStateWithLifecycle()
+    val gitHubAuthError by viewModel.gitHubAuthError.collectAsStateWithLifecycle()
 
     val openTabs = remember { mutableStateListOf<OpenTab>() }
     var activeTabId by remember { mutableStateOf<String?>(null) }
@@ -601,6 +609,19 @@ fun WorkspaceScreen(
                 showModelDialog = false
             },
             onDismissRequest = { showModelDialog = false }
+        )
+    }
+
+    if (showGitHubSignInDialog) {
+        GitHubSignInDialog(
+            currentUser = gitHubUser,
+            deviceCodeInfo = gitHubDeviceCodeInfo,
+            isAuthenticating = isGitHubAuthenticating,
+            authStatusText = gitHubAuthStatusText,
+            authError = gitHubAuthError,
+            onDismissRequest = { viewModel.dismissGitHubSignInDialog() },
+            onRequestDeviceCode = { viewModel.requestGitHubDeviceCode(context) },
+            onLoginWithToken = { token -> viewModel.loginGitHubWithToken(context, token) }
         )
     }
 }

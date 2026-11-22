@@ -3694,6 +3694,110 @@ fun AccountSettingsPage(
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            val gitHubUser by viewModel.gitHubUser.collectAsStateWithLifecycle()
+            val isGitHubLoggedIn = gitHubUser != null
+
+            SettingsCard {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(if (isGitHubLoggedIn) Color(0xFF24292E) else MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (!gitHubUser?.avatarUrl.isNullOrBlank()) {
+                                AsyncImage(
+                                    model = gitHubUser!!.avatarUrl,
+                                    contentDescription = gitHubUser!!.username,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_github),
+                                    contentDescription = null,
+                                    tint = if (isGitHubLoggedIn) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column {
+                            Text(
+                                text = if (isGitHubLoggedIn) "@${gitHubUser!!.username}" else stringResource(R.string.github_account_title),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (isGitHubLoggedIn) stringResource(R.string.status_authenticated) else stringResource(R.string.github_not_connected),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isGitHubLoggedIn) AntigravityGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = stringResource(R.string.github_account_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (isGitHubLoggedIn) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.refreshGitHubAuth(context)
+                                    Toast.makeText(context, "GitHub account verified", Toast.LENGTH_SHORT).show()
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(stringResource(R.string.github_btn_test_connection))
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.signOutGitHub(context)
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(stringResource(R.string.github_btn_sign_out))
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                viewModel.openGitHubSignInDialog()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF24292E)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_github),
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.github_btn_connect), color = Color.White)
+                        }
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(30.dp))
         }
     }

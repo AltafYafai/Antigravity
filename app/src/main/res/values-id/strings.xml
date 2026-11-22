@@ -150,6 +150,27 @@
     <string name="account_token_copied">Token akses berhasil disalin ke papan klip</string>
     <string name="account_btn_models_usage">Model &amp; Penggunaan</string>
 
+    <string name="github_account_title">Akun GitHub</string>
+    <string name="github_account_subtitle">Hubungkan profil GitHub untuk sinkronisasi Git, clone repositori, dan alat GitHub CLI.</string>
+    <string name="github_not_connected">Belum terhubung</string>
+    <string name="github_connected">Terhubung</string>
+    <string name="github_btn_connect">Hubungkan GitHub</string>
+    <string name="github_btn_sign_out">Putuskan GitHub</string>
+    <string name="github_btn_test_connection">Verifikasi Token</string>
+    <string name="github_dialog_title">Hubungkan GitHub</string>
+    <string name="github_tab_device_code">Kode Perangkat</string>
+    <string name="github_tab_token">Personal Access Token</string>
+    <string name="github_device_code_desc">Buka GitHub di peramban dan masukkan kode di bawah untuk masuk langsung tanpa membuat token.</string>
+    <string name="github_device_code_copy_open">Salin Kode &amp; Buka GitHub</string>
+    <string name="github_device_code_waiting">Menunggu otorisasi di GitHub...</string>
+    <string name="github_pat_desc">Buat Personal Access Token dengan cakupan repo, read:org, workflow, dan gist.</string>
+    <string name="github_btn_generate_token">Buat Token di GitHub</string>
+    <string name="github_pat_placeholder">Tempel token (ghp_...)</string>
+    <string name="github_btn_connect_pat">Simpan &amp; Hubungkan</string>
+    <string name="github_toast_connected">GitHub berhasil terhubung sebagai @%1$s</string>
+    <string name="github_toast_disconnected">GitHub berhasil diputuskan</string>
+    <string name="github_toast_error">Otentikasi GitHub gagal: %1$s</string>
+
     <string name="chat_new_conversation">Percakapan Baru</string>
 
     <string name="model_btn_view_usage">Lihat Batas Pemakaian</string>

@@ -41,6 +41,9 @@ import id.vern.antigravity.data.SlashAction
 import id.vern.antigravity.data.SlashCommandParser
 import id.vern.antigravity.data.SYSTEM_SLASH_COMMANDS
 import id.vern.antigravity.data.mergeDynamicSlashActions
+import id.vern.antigravity.oauth.DeviceCodeInfo
+import id.vern.antigravity.oauth.GitHubAuthManager
+import id.vern.antigravity.oauth.GitHubUser
 import id.vern.antigravity.service.AgyModelsService
 import id.vern.antigravity.service.CliModel
 import id.vern.antigravity.service.CloudCodeQuotaService
@@ -461,6 +464,24 @@ class AntigravityViewModel : ViewModel() {
     private val mutableShowGoogleSignInDialog = MutableStateFlow(false)
     val showGoogleSignInDialog: StateFlow<Boolean> = mutableShowGoogleSignInDialog.asStateFlow()
 
+    private val mutableGitHubUser = MutableStateFlow<GitHubUser?>(null)
+    val gitHubUser: StateFlow<GitHubUser?> = mutableGitHubUser.asStateFlow()
+
+    private val mutableShowGitHubSignInDialog = MutableStateFlow(false)
+    val showGitHubSignInDialog: StateFlow<Boolean> = mutableShowGitHubSignInDialog.asStateFlow()
+
+    private val mutableIsGitHubAuthenticating = MutableStateFlow(false)
+    val isGitHubAuthenticating: StateFlow<Boolean> = mutableIsGitHubAuthenticating.asStateFlow()
+
+    private val mutableGitHubAuthStatusText = MutableStateFlow<String?>(null)
+    val gitHubAuthStatusText: StateFlow<String?> = mutableGitHubAuthStatusText.asStateFlow()
+
+    private val mutableGitHubAuthError = MutableStateFlow<String?>(null)
+    val gitHubAuthError: StateFlow<String?> = mutableGitHubAuthError.asStateFlow()
+
+    private val mutableGitHubDeviceCodeInfo = MutableStateFlow<DeviceCodeInfo?>(null)
+    val gitHubDeviceCodeInfo: StateFlow<DeviceCodeInfo?> = mutableGitHubDeviceCodeInfo.asStateFlow()
+
     private val mutablePendingAuthUrl = MutableStateFlow<String?>(null)
     val pendingAuthUrl: StateFlow<String?> = mutablePendingAuthUrl.asStateFlow()
 
@@ -620,6 +641,7 @@ class AntigravityViewModel : ViewModel() {
 
     fun refreshAuthState(context: Context) {
         OAuthManager.checkAndImportExistingToken(context)
+        refreshGitHubAuth(context)
         val email = OAuthManager.getUserEmail(context)
         mutableUserEmail.value = email
         val name = OAuthManager.getUserName(context) ?: if (email != null) {
@@ -4140,6 +4162,107 @@ class AntigravityViewModel : ViewModel() {
         restartCoreService(context)
         addLog("Auth", "Signed out of Google account")
         Toast.makeText(context, context.getString(R.string.account_toast_signed_out), Toast.LENGTH_SHORT).show()
+    }
+
+    private var activeDevicePollJob: Job? = null
+
+    fun refreshGitHubAuth(context: Context) {
+        viewModelScope.launch {
+            val user = GitHubAuthManager.getStoredUser(context)
+            mutableGitHubUser.value = user
+        }
+    }
+
+    fun openGitHubSignInDialog() {
+        mutableGitHubAuthError.value = null
+        mutableGitHubAuthStatusText.value = null
+        mutableShowGitHubSignInDialog.value = true
+    }
+
+    fun dismissGitHubSignInDialog() {
+        mutableShowGitHubSignInDialog.value = false
+        mutableIsGitHubAuthenticating.value = false
+        mutableGitHubAuthStatusText.value = null
+        activeDevicePollJob?.cancel()
+        activeDevicePollJob = null
+    }
+
+    fun requestGitHubDeviceCode(context: Context) {
+        activeDevicePollJob?.cancel()
+        activeDevicePollJob = null
+        viewModelScope.launch {
+            mutableIsGitHubAuthenticating.value = true
+            mutableGitHubAuthError.value = null
+            mutableGitHubAuthStatusText.value = "Requesting one-time code..."
+            val result = GitHubAuthManager.requestDeviceCode()
+            if (result.isSuccess) {
+                val info = result.getOrThrow()
+                mutableGitHubDeviceCodeInfo.value = info
+                mutableGitHubAuthStatusText.value = "Waiting for authorization on GitHub..."
+                pollGitHubDeviceCode(context, info)
+            } else {
+                mutableIsGitHubAuthenticating.value = false
+                mutableGitHubAuthError.value = result.exceptionOrNull()?.message ?: "Failed to request device code"
+            }
+        }
+    }
+
+    private fun pollGitHubDeviceCode(context: Context, info: DeviceCodeInfo) {
+        activeDevicePollJob?.cancel()
+        activeDevicePollJob = viewModelScope.launch {
+            val pollResult = GitHubAuthManager.pollDeviceCode(
+                deviceCode = info.deviceCode,
+                initialIntervalSeconds = info.interval,
+                maxDurationSeconds = info.expiresIn,
+                onStatusUpdate = { status ->
+                    mutableGitHubAuthStatusText.value = status
+                }
+            )
+            mutableIsGitHubAuthenticating.value = false
+            if (pollResult.isSuccess) {
+                val user = pollResult.getOrThrow()
+                GitHubAuthManager.saveCredentials(context, user)
+                mutableGitHubUser.value = user
+                mutableShowGitHubSignInDialog.value = false
+                mutableGitHubDeviceCodeInfo.value = null
+                mutableGitHubAuthStatusText.value = null
+                addLog("GitHub", "Successfully signed in to GitHub as @${user.username}")
+                Toast.makeText(context, context.getString(R.string.github_toast_connected, user.username), Toast.LENGTH_SHORT).show()
+            } else {
+                mutableGitHubAuthError.value = pollResult.exceptionOrNull()?.message ?: "Authorization failed"
+            }
+        }
+    }
+
+    fun loginGitHubWithToken(context: Context, token: String) {
+        viewModelScope.launch {
+            mutableIsGitHubAuthenticating.value = true
+            mutableGitHubAuthError.value = null
+            val result = GitHubAuthManager.verifyAndFetchUser(token.trim())
+            mutableIsGitHubAuthenticating.value = false
+            if (result.isSuccess) {
+                val user = result.getOrThrow()
+                GitHubAuthManager.saveCredentials(context, user)
+                mutableGitHubUser.value = user
+                mutableShowGitHubSignInDialog.value = false
+                addLog("GitHub", "Successfully authenticated with GitHub token as @${user.username}")
+                Toast.makeText(context, context.getString(R.string.github_toast_connected, user.username), Toast.LENGTH_SHORT).show()
+            } else {
+                val errMsg = result.exceptionOrNull()?.message ?: "Failed to verify GitHub token"
+                mutableGitHubAuthError.value = errMsg
+                Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    fun signOutGitHub(context: Context) {
+        activeDevicePollJob?.cancel()
+        activeDevicePollJob = null
+        GitHubAuthManager.logout(context)
+        mutableGitHubUser.value = null
+        mutableGitHubDeviceCodeInfo.value = null
+        addLog("GitHub", "Signed out of GitHub")
+        Toast.makeText(context, context.getString(R.string.github_toast_disconnected), Toast.LENGTH_SHORT).show()
     }
 
     fun startCoreService(context: Context) {

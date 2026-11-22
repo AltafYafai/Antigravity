@@ -30,7 +30,10 @@ object BootstrapInstaller {
     private const val TAG = "BootstrapInstaller"
 
     private const val ASSET_GLIBC = "antigravity-glibc.zip"
-    private const val BOOTSTRAP_URL = "https://github.com/KuatoDev/antigravity-bootstrap/releases/download/core-v1/bootstrap-aarch64.zip"
+    private val BOOTSTRAP_URLS = listOf(
+        "https://github.com/AltafYafai/Antigravity/releases/download/v1.0.1-6/bootstrap-aarch64.zip",
+        "https://github.com/KuatoDev/antigravity-bootstrap/releases/download/core-v1/bootstrap-aarch64.zip"
+    )
     private const val BOOTSTRAP_SHA256 = "6a740663ffaca4e63cb5e485c08b150828ef07fd6325f1f2146414a2d256855c"
     private const val MARKER_FILE = ".installed"
     private const val ERROR_LOG_FILE = "bootstrap_error.log"
@@ -200,12 +203,38 @@ object BootstrapInstaller {
             }
         }
         val zipFile = File(context.cacheDir, "bootstrap-aarch64.zip")
-        downloadVerified(BOOTSTRAP_URL, BOOTSTRAP_SHA256, zipFile) { p ->
-            onProgress("Downloading Linux userspace bootstrap...", p * 0.85f)
+        var downloadSuccess = false
+        var lastErr: Throwable? = null
+
+        for (url in BOOTSTRAP_URLS) {
+            try {
+                downloadVerified(url, BOOTSTRAP_SHA256, zipFile) { p ->
+                    onProgress("Downloading Linux userspace bootstrap...", p * 0.85f)
+                }
+                downloadSuccess = true
+                break
+            } catch (e: Exception) {
+                lastErr = e
+                Log.w(TAG, "Download attempt failed from $url: ${e.message}")
+            }
         }
+
+        if (!downloadSuccess) {
+            throw IllegalStateException("Failed downloading bootstrap from all mirrors: ${lastErr?.message}", lastErr)
+        }
+
         try {
             onProgress("Extracting Linux userspace bootstrap...", 0.9f)
             zipFile.inputStream().use { extractZipStream(it, targetDir) }
+
+            // Cache downloaded bootstrap into shared storage for fast re-installation
+            try {
+                val cachedDest = File("/storage/emulated/0/Download/Andronix/bootstrap-aarch64.zip")
+                if (!cachedDest.exists() || cachedDest.length() == 0L) {
+                    cachedDest.parentFile?.mkdirs()
+                    zipFile.copyTo(cachedDest, overwrite = true)
+                }
+            } catch (e: Exception) {}
         } finally {
             try { zipFile.delete() } catch (e: Exception) {}
         }

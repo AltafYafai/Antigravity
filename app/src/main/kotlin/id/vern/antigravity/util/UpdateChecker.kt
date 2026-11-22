@@ -184,10 +184,11 @@ class UpdateChecker(private val context: Context) {
             return@withContext null
         }
 
+        // Sort in descending order (newest release first)
         validReleases.sortWith { a, b ->
             when {
-                isNewerVersion(a.version, b.version) -> -1
-                isNewerVersion(b.version, a.version) -> 1
+                isNewerVersion(a.version, b.version) -> 1
+                isNewerVersion(b.version, a.version) -> -1
                 else -> 0
             }
         }

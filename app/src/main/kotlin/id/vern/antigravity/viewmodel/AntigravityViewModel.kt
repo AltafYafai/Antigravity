@@ -1191,12 +1191,28 @@ class AntigravityViewModel : ViewModel() {
     }
 
     fun startOtaDownload(context: Context, info: UpdateChecker.UpdateInfo) {
-        otaState.value = AppUpdateState.Downloading(0)
+        otaState.value = AppUpdateState.Downloading(
+            progress = 0,
+            bytesDownloaded = 0L,
+            totalBytes = info.fileSizeBytes,
+            fileName = info.fileName,
+            version = info.version
+        )
         viewModelScope.launch(Dispatchers.IO) {
             CoreUpdateDelegate.startOtaDownload(context, info) { state ->
                 otaState.value = state
             }
         }
+    }
+
+    fun cancelOtaDownload(context: Context, downloadId: Long) {
+        CoreUpdateDelegate.cancelOtaDownload(context, downloadId)
+        otaState.value = AppUpdateState.Idle
+    }
+
+    fun snoozeOtaUpdate(context: Context) {
+        CoreUpdateDelegate.snoozeOtaUpdate(context)
+        otaState.value = AppUpdateState.Idle
     }
 
     fun dismissOtaUpdate() {

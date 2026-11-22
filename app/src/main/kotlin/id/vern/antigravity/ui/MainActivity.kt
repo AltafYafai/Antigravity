@@ -107,10 +107,17 @@ class MainActivity : ComponentActivity() {
                 AppUpdateDialog(
                     state = otaState,
                     onDismiss = { viewModel.dismissOtaUpdate() },
+                    onLater = { viewModel.snoozeOtaUpdate(this@MainActivity) },
+                    onCancelDownload = { downloadId -> viewModel.cancelOtaDownload(this@MainActivity, downloadId) },
                     onStartDownload = { info -> viewModel.startOtaDownload(this@MainActivity, info) },
                     onInstallApk = { downloadId ->
-                        UpdateChecker(this@MainActivity).installApk(downloadId)
-                        viewModel.dismissOtaUpdate()
+                        val launched = UpdateChecker(this@MainActivity).installApk(downloadId)
+                        if (launched) {
+                            viewModel.dismissOtaUpdate()
+                        }
+                    },
+                    onOpenDownloadsFolder = {
+                        UpdateChecker(this@MainActivity).openDownloadsFolder()
                     }
                 )
             }

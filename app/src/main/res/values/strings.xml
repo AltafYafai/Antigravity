@@ -669,5 +669,38 @@
     <string name="model_toast_requires_pro">%1$s requires a Google AI Pro subscription</string>
     <string name="model_toast_requires_ultra">%1$s requires a Google AI Ultra subscription</string>
     <string name="workspace_label">Workspace: %1$s</string>
+
+    <!-- Redesigned Updater Strings -->
+    <string name="ota_dialog_title">New Update Available</string>
+    <string name="ota_dialog_subtitle">A new version of Antigravity is ready to install</string>
+    <string name="ota_version_diff_badge">%1$s → %2$s</string>
+    <string name="ota_meta_size">Size: %1$s</string>
+    <string name="ota_meta_date">Released: %1$s</string>
+    <string name="ota_meta_channel">Release Channel: Stable</string>
+    <string name="ota_changelog_section_title">What\'s Changed</string>
+    <string name="ota_tag_feature">New</string>
+    <string name="ota_tag_fix">Fix</string>
+    <string name="ota_tag_improvement">Improvement</string>
+    <string name="ota_tag_security">Security</string>
+    <string name="ota_btn_update_now">Update Now</string>
+    <string name="ota_btn_later">Later</string>
+    <string name="ota_btn_cancel">Cancel</string>
+    <string name="ota_downloading_title">Downloading Update</string>
+    <string name="ota_download_progress">%1$s of %2$s (%3$d%%)</string>
+    <string name="ota_btn_cancel_download">Cancel Download</string>
+    <string name="ota_btn_hide_download">Run in Background</string>
+    <string name="ota_download_background_tip">Download is running in the background. You can keep using Antigravity.</string>
+    <string name="ota_install_ready_title">Update Ready to Install</string>
+    <string name="ota_install_ready_subtitle">Version %1$s has been downloaded and verified</string>
+    <string name="ota_install_ready_details">Package: %1$s • %2$s</string>
+    <string name="ota_install_ready_hint">Tap Install Now to open the Android package installer. Your data, settings, and workspaces will be preserved.</string>
+    <string name="ota_btn_install_now">Install Now</string>
+    <string name="ota_btn_open_files">Open in Files</string>
+    <string name="ota_up_to_date_title">You\'re Up to Date</string>
+    <string name="ota_up_to_date_subtitle">Antigravity %1$s is the latest version available</string>
+    <string name="ota_btn_done">Done</string>
+    <string name="ota_permission_dialog_title">Permission Required</string>
+    <string name="ota_permission_dialog_msg">To install updates directly, Antigravity requires the \"Install unknown apps\" permission. Please grant permission in the system settings.</string>
+    <string name="ota_btn_open_settings">Open Settings</string>
 </resources>
 

@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import id.vern.antigravity.R
@@ -18,11 +19,37 @@ import id.vern.antigravity.ui.MainActivity
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+
+enum class ChangelogType {
+    FEATURE,      // ✨ New Features
+    FIX,          // 🐛 Bug Fixes
+    IMPROVEMENT,  // ⚡ Improvements & Performance
+    SECURITY,     // 🔒 Security & Auth
+    GENERAL       // 📝 General changes
+}
+
+data class ChangelogItem(
+    val category: ChangelogType,
+    val title: String,
+    val description: String = ""
+)
+
+data class ReleaseChangelog(
+    val version: String,
+    val title: String,
+    val publishedDate: String,
+    val rawBody: String = "",
+    val items: List<ChangelogItem> = emptyList()
+)
 
 class UpdateChecker(private val context: Context) {
     private val TAG = "UpdateChecker"
@@ -32,7 +59,20 @@ class UpdateChecker(private val context: Context) {
         const val OTA_NOTIFICATION_ID = 1009
         const val GITHUB_OWNER = "KuatoDev"
         const val GITHUB_REPO = "Antigravity"
+        private const val PREFS_NAME = "antigravity_ota_prefs"
+        private const val PREF_LAST_NOTIFIED = "last_notified_ota_version"
+        private const val PREF_LAST_SNOOZED_TIME = "last_snoozed_ota_time"
     }
+
+    data class RawRelease(
+        val version: String,
+        val title: String,
+        val publishedDate: String,
+        val body: String,
+        val apkAssetSize: Long,
+        val apkDownloadUrl: String,
+        val apkFileName: String
+    )
 
     private fun fetchGitHubApi(apiUrl: String): Pair<Int, String?> {
         return try {
@@ -60,112 +100,240 @@ class UpdateChecker(private val context: Context) {
     suspend fun checkForUpdates(
         currentVersion: String,
         isManualCheck: Boolean = false
-    ): UpdateInfo? = withContext(Dispatchers.IO) {
+    ): AppUpdateState? = withContext(Dispatchers.IO) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+        if (!isManualCheck) {
+            val lastSnoozed = prefs.getLong(PREF_LAST_SNOOZED_TIME, 0L)
+            if (System.currentTimeMillis() - lastSnoozed < 24 * 60 * 60 * 1000L) {
+                Log.d(TAG, "OTA check skipped: snoozed within last 24h")
+                return@withContext null
+            }
+        }
+
         val candidateOwners = listOf("AltafYafai", GITHUB_OWNER)
         val repo = GITHUB_REPO
 
-        var foundReleaseObj: JSONObject? = null
-
-        fun hasApkAsset(release: JSONObject): Boolean {
-            val assets = release.optJSONArray("assets") ?: return false
-            for (i in 0 until assets.length()) {
-                val name = assets.optJSONObject(i)?.optString("name", "") ?: ""
-                if (name.endsWith(".apk", ignoreCase = true)) return true
-            }
-            return false
-        }
+        val validReleases = mutableListOf<RawRelease>()
 
         for (owner in candidateOwners) {
-            val latestUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
-            val (codeLatest, bodyLatest) = fetchGitHubApi(latestUrl)
-
-            if (codeLatest == HttpURLConnection.HTTP_OK && !bodyLatest.isNullOrBlank()) {
-                try {
-                    val obj = JSONObject(bodyLatest)
-                    if (obj.has("tag_name") && hasApkAsset(obj)) {
-                        foundReleaseObj = obj
-                        break
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Parse error for $owner latest release: ${e.localizedMessage}")
-                }
-            }
-
-            val listUrl = "https://api.github.com/repos/$owner/$repo/releases?per_page=5"
+            val listUrl = "https://api.github.com/repos/$owner/$repo/releases?per_page=30"
             val (codeList, bodyList) = fetchGitHubApi(listUrl)
             if (codeList == HttpURLConnection.HTTP_OK && !bodyList.isNullOrBlank()) {
                 try {
                     val array = JSONArray(bodyList)
                     for (i in 0 until array.length()) {
                         val r = array.getJSONObject(i)
-                        if (!r.optBoolean("draft", false) && hasApkAsset(r)) {
-                            foundReleaseObj = r
-                            break
+                        if (r.optBoolean("draft", false)) continue
+
+                        val tagName = r.optString("tag_name", "").trim()
+                        if (tagName.isBlank()) continue
+
+                        val assets = r.optJSONArray("assets") ?: continue
+                        var apkUrl = ""
+                        var apkName = ""
+                        var apkSize = 0L
+
+                        for (j in 0 until assets.length()) {
+                            val a = assets.getJSONObject(j)
+                            val name = a.optString("name", "")
+                            if (name.endsWith(".apk", ignoreCase = true)) {
+                                val bUrl = a.optString("browser_download_url", "")
+                                val aUrl = a.optString("url", "")
+                                apkUrl = if (bUrl.isNotBlank()) bUrl else aUrl
+                                apkName = name
+                                apkSize = a.optLong("size", 0L)
+                                break
+                            }
+                        }
+
+                        if (apkUrl.isNotBlank()) {
+                            val publishedAt = r.optString("published_at", "")
+                            val releaseName = r.optString("name", tagName)
+                            val body = r.optString("body", "")
+
+                            val rel = RawRelease(
+                                version = tagName,
+                                title = releaseName,
+                                publishedDate = publishedAt,
+                                body = body,
+                                apkAssetSize = apkSize,
+                                apkDownloadUrl = apkUrl,
+                                apkFileName = apkName.ifBlank { "Antigravity-$tagName.apk" }
+                            )
+                            if (validReleases.none { it.version == rel.version }) {
+                                validReleases.add(rel)
+                            }
                         }
                     }
-                    if (foundReleaseObj != null) break
+                    if (validReleases.isNotEmpty()) break
                 } catch (e: Exception) {
-                    Log.w(TAG, "Parse error for $owner releases list: ${e.localizedMessage}")
+                    Log.w(TAG, "Error parsing releases for $owner: ${e.message}")
                 }
             }
         }
 
-        if (foundReleaseObj == null) {
+        if (validReleases.isEmpty()) {
+            if (isManualCheck) {
+                return@withContext AppUpdateState.UpToDate(
+                    currentVersion = currentVersion,
+                    latestReleaseTitle = "Antigravity v$currentVersion",
+                    latestReleaseDate = "Latest"
+                )
+            }
             return@withContext null
         }
 
-        try {
-            val tagName = foundReleaseObj.getString("tag_name")
-            val body = foundReleaseObj.optString("body", "")
-            val assets = foundReleaseObj.optJSONArray("assets") ?: JSONArray()
+        validReleases.sortWith { a, b ->
+            when {
+                isNewerVersion(a.version, b.version) -> -1
+                isNewerVersion(b.version, a.version) -> 1
+                else -> 0
+            }
+        }
 
-            var downloadUrl = ""
-            var originalFileName = ""
+        val latest = validReleases.first()
+        val hasUpdate = isNewerVersion(currentVersion, latest.version)
 
-            for (i in 0 until assets.length()) {
-                val asset = assets.getJSONObject(i)
-                val name = asset.optString("name", "")
-                if (name.endsWith(".apk", ignoreCase = true)) {
-                    val assetApiUrl = asset.optString("url")
-                    val browserDownloadUrl = asset.optString("browser_download_url")
-                    downloadUrl = if (browserDownloadUrl.isNotBlank()) browserDownloadUrl else assetApiUrl
-                    originalFileName = name
-                    break
-                }
+        if (hasUpdate) {
+            val intervening = validReleases.filter { isNewerVersion(currentVersion, it.version) }
+            val structuredChangelogs = intervening.map { rel ->
+                ReleaseChangelog(
+                    version = rel.version,
+                    title = rel.title,
+                    publishedDate = formatReleaseDate(rel.publishedDate),
+                    rawBody = rel.body,
+                    items = parseChangelogBody(rel.body)
+                )
             }
 
-            if (downloadUrl.isBlank()) {
-                return@withContext null
-            }
-
-            if (!isNewerVersion(currentVersion, tagName)) {
-                return@withContext null
-            }
-
-            val finalFileName = if (originalFileName.isNotBlank()) {
-                originalFileName
-            } else {
-                downloadUrl.substringAfterLast("/").substringBefore("?").ifBlank { "antigravity-update-$tagName.apk" }
+            val fullFormattedBody = intervening.joinToString("\n\n") { rel ->
+                "### ${rel.title.ifBlank { rel.version }}\n${rel.body.trim()}"
             }
 
             val updateInfo = UpdateInfo(
-                version = tagName,
-                changelog = body,
-                downloadUrl = downloadUrl,
-                fileName = finalFileName
+                currentVersion = currentVersion,
+                version = latest.version,
+                releaseTitle = latest.title.ifBlank { "Antigravity ${latest.version}" },
+                publishedDate = formatReleaseDate(latest.publishedDate),
+                fileSizeFormatted = formatFileSize(latest.apkAssetSize),
+                fileSizeBytes = latest.apkAssetSize,
+                downloadUrl = latest.apkDownloadUrl,
+                fileName = latest.apkFileName,
+                changelogText = fullFormattedBody,
+                versionChangelogs = structuredChangelogs
             )
+
             showUpdateNotification(updateInfo)
-            return@withContext updateInfo
-        } catch (e: Exception) {
-            Log.e(TAG, "OTA check parse error", e)
+            return@withContext AppUpdateState.Available(updateInfo)
+        } else {
+            if (isManualCheck) {
+                val highlights = parseChangelogBody(latest.body).take(5).map {
+                    if (it.title.isNotBlank()) "${it.title}: ${it.description}" else it.description
+                }
+                return@withContext AppUpdateState.UpToDate(
+                    currentVersion = currentVersion,
+                    latestReleaseTitle = latest.title,
+                    latestReleaseDate = formatReleaseDate(latest.publishedDate),
+                    recentHighlights = highlights
+                )
+            }
             return@withContext null
         }
     }
 
+    fun snoozeUpdate() {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putLong(PREF_LAST_SNOOZED_TIME, System.currentTimeMillis()).apply()
+        Log.i(TAG, "OTA update snoozed for 24 hours")
+    }
+
+    fun parseChangelogBody(body: String): List<ChangelogItem> {
+        val items = mutableListOf<ChangelogItem>()
+        if (body.isBlank()) return items
+
+        val lines = body.lines().map { it.trim() }.filter { it.isNotBlank() }
+
+        for (line in lines) {
+            if (line.startsWith("#")) continue
+            val bulletMatch = Regex("^[-*•]\\s*(.+)$").find(line) ?: continue
+            val content = bulletMatch.groupValues[1].trim()
+
+            val lower = content.lowercase(Locale.ROOT)
+            if (lower.startsWith("direct download") ||
+                lower.startsWith("checksums") ||
+                lower.startsWith("signed with release key") ||
+                lower.startsWith("see attached") ||
+                lower.startsWith("http://") ||
+                lower.startsWith("https://") ||
+                lower.startsWith("[")
+            ) {
+                continue
+            }
+
+            var title = ""
+            var desc = content
+            val titleMatch = Regex("^\\*\\*(.+?)\\*\\*:\\s*(.*)$").find(content)
+            if (titleMatch != null) {
+                title = titleMatch.groupValues[1].trim()
+                desc = titleMatch.groupValues[2].trim()
+            } else {
+                val colonIdx = content.indexOf(":")
+                if (colonIdx in 3..35 && !content.substring(0, colonIdx).contains(" ")) {
+                    title = content.substring(0, colonIdx).trim()
+                    desc = content.substring(colonIdx + 1).trim()
+                }
+            }
+
+            desc = desc.replace(Regex("\\[(.+?)\\]\\(.+?\\)"), "$1").replace("`", "").trim()
+            if (desc.isBlank() && title.isNotBlank()) {
+                desc = title
+                title = ""
+            }
+
+            val combined = "$title $desc".lowercase(Locale.ROOT)
+            val category = when {
+                combined.contains("fix") || combined.contains("resolve") || combined.contains("bug") ||
+                        combined.contains("issue") || combined.contains("error") || combined.contains("crash") -> ChangelogType.FIX
+                combined.contains("feat") || combined.contains("add") || combined.contains("new") ||
+                        combined.contains("support") || combined.contains("inbuilt") || combined.contains("updater") ||
+                        combined.contains("dialog") || combined.contains("authorship") -> ChangelogType.FEATURE
+                combined.contains("auth") || combined.contains("token") || combined.contains("login") ||
+                        combined.contains("credential") || combined.contains("security") || combined.contains("oauth") -> ChangelogType.SECURITY
+                combined.contains("perf") || combined.contains("optimi") || combined.contains("speed") ||
+                        combined.contains("fast") || combined.contains("clean") || combined.contains("sync") ||
+                        combined.contains("improve") -> ChangelogType.IMPROVEMENT
+                else -> ChangelogType.GENERAL
+            }
+
+            if (title.isNotBlank() || desc.isNotBlank()) {
+                items.add(ChangelogItem(category = category, title = title, description = desc))
+            }
+        }
+        return items
+    }
+
+    fun formatReleaseDate(rawDate: String): String {
+        return try {
+            val instant = Instant.parse(rawDate)
+            val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.getDefault())
+                .withZone(ZoneId.systemDefault())
+            formatter.format(instant)
+        } catch (e: Exception) {
+            rawDate.take(10)
+        }
+    }
+
+    fun formatFileSize(bytes: Long): String {
+        if (bytes <= 0) return "Unknown size"
+        val mb = bytes.toDouble() / (1024 * 1024)
+        return String.format(Locale.US, "%.1f MB", mb)
+    }
+
     fun showUpdateNotification(updateInfo: UpdateInfo, force: Boolean = false) {
         try {
-            val prefs = context.getSharedPreferences("antigravity_ota_prefs", Context.MODE_PRIVATE)
-            val lastNotifiedVersion = prefs.getString("last_notified_ota_version", "") ?: ""
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val lastNotifiedVersion = prefs.getString(PREF_LAST_NOTIFIED, "") ?: ""
             if (!force && lastNotifiedVersion == updateInfo.version) {
                 return
             }
@@ -199,9 +367,9 @@ class UpdateChecker(private val context: Context) {
 
             val bigText = buildString {
                 append(content)
-                if (updateInfo.changelog.isNotBlank()) {
+                if (updateInfo.changelogText.isNotBlank()) {
                     append("\n\n")
-                    append(updateInfo.changelog.take(300))
+                    append(updateInfo.changelogText.take(300))
                 }
             }
 
@@ -217,7 +385,7 @@ class UpdateChecker(private val context: Context) {
                 .build()
 
             notificationManager.notify(OTA_NOTIFICATION_ID, notification)
-            prefs.edit().putString("last_notified_ota_version", updateInfo.version).apply()
+            prefs.edit().putString(PREF_LAST_NOTIFIED, updateInfo.version).apply()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to post OTA update notification", e)
         }
@@ -250,7 +418,17 @@ class UpdateChecker(private val context: Context) {
         return dm.enqueue(request)
     }
 
-    fun installApk(downloadId: Long) {
+    fun cancelDownload(downloadId: Long) {
+        try {
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            dm.remove(downloadId)
+            Log.i(TAG, "Successfully cancelled OTA download ID $downloadId")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed cancelling download $downloadId: ${e.message}")
+        }
+    }
+
+    fun installApk(downloadId: Long): Boolean {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (!context.packageManager.canRequestPackageInstalls()) {
@@ -259,7 +437,8 @@ class UpdateChecker(private val context: Context) {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     context.startActivity(intent)
-                    return
+                    Toast.makeText(context, context.getString(R.string.ota_permission_dialog_msg), Toast.LENGTH_LONG).show()
+                    return false
                 }
             }
 
@@ -301,7 +480,8 @@ class UpdateChecker(private val context: Context) {
             }
 
             if (contentUri == null) {
-                return
+                Toast.makeText(context, "Could not locate downloaded APK file", Toast.LENGTH_SHORT).show()
+                return false
             }
 
             val installIntent = Intent(Intent.ACTION_VIEW).apply {
@@ -310,12 +490,32 @@ class UpdateChecker(private val context: Context) {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(installIntent)
+            return true
         } catch (e: Exception) {
             Log.e(TAG, "OTA install error: ${e.localizedMessage}", e)
+            Toast.makeText(context, "Install failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            return false
         }
     }
 
-    private fun isNewerVersion(currentVersion: String, remoteVersion: String): Boolean {
+    fun openDownloadsFolder() {
+        try {
+            val intent = Intent(DownloadManager.ACTION_VIEW_DOWNLOADS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(Uri.parse(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).path), "*/*")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (e2: Exception) {}
+        }
+    }
+
+    fun isNewerVersion(currentVersion: String, remoteVersion: String): Boolean {
         try {
             val cleanCurrent = currentVersion.trim().removePrefix("v").removePrefix("V")
             val cleanRemote = remoteVersion.trim().removePrefix("v").removePrefix("V")
@@ -345,50 +545,119 @@ class UpdateChecker(private val context: Context) {
         }
     }
 
-    suspend fun trackDownloadProgress(downloadId: Long, onState: (AppUpdateState) -> Unit) {
+    suspend fun trackDownloadProgress(
+        downloadId: Long,
+        info: UpdateInfo,
+        onState: (AppUpdateState) -> Unit
+    ) {
         val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         var downloading = true
         while (downloading) {
-            val cursor = dm.query(DownloadManager.Query().setFilterById(downloadId))
-            if (cursor != null && cursor.moveToFirst()) {
-                val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
-                when (status) {
-                    DownloadManager.STATUS_SUCCESSFUL -> {
-                        onState(AppUpdateState.ReadyToInstall(downloadId))
-                        downloading = false
-                    }
-                    DownloadManager.STATUS_FAILED -> {
-                        onState(AppUpdateState.Idle)
-                        downloading = false
-                    }
-                    else -> {
-                        val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-                        val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
-                        if (total > 0) {
-                            val progress = ((downloaded * 100L) / total).toInt()
-                            onState(AppUpdateState.Downloading(progress))
+            try {
+                val cursor = dm.query(DownloadManager.Query().setFilterById(downloadId))
+                if (cursor != null && cursor.moveToFirst()) {
+                    val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                    val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                    val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                    val effectiveTotal = if (total > 0) total else info.fileSizeBytes
+
+                    when (status) {
+                        DownloadManager.STATUS_SUCCESSFUL -> {
+                            onState(
+                                AppUpdateState.ReadyToInstall(
+                                    downloadId = downloadId,
+                                    fileName = info.fileName,
+                                    version = info.version,
+                                    fileSizeFormatted = info.fileSizeFormatted
+                                )
+                            )
+                            downloading = false
+                        }
+                        DownloadManager.STATUS_FAILED -> {
+                            val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                            Log.w(TAG, "Download failed with reason code: $reason")
+                            onState(AppUpdateState.Error("Download failed (Error $reason). Please check your internet connection."))
+                            downloading = false
+                        }
+                        else -> {
+                            val progress = if (effectiveTotal > 0) {
+                                ((downloaded * 100L) / effectiveTotal).toInt().coerceIn(0, 100)
+                            } else {
+                                0
+                            }
+                            onState(
+                                AppUpdateState.Downloading(
+                                    progress = progress,
+                                    bytesDownloaded = downloaded,
+                                    totalBytes = effectiveTotal,
+                                    downloadId = downloadId,
+                                    fileName = info.fileName,
+                                    version = info.version
+                                )
+                            )
                         }
                     }
+                    cursor.close()
+                } else {
+                    downloading = false
                 }
-                cursor.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error querying download progress: ${e.message}")
             }
-            delay(300)
+            delay(350)
         }
     }
 
     data class UpdateInfo(
+        val currentVersion: String = "",
         val version: String,
-        val changelog: String,
+        val releaseTitle: String = "",
+        val publishedDate: String = "",
+        val fileSizeFormatted: String = "",
+        val fileSizeBytes: Long = 0L,
         val downloadUrl: String,
-        val fileName: String = ""
-    )
+        val fileName: String = "",
+        val changelogText: String = "",
+        val versionChangelogs: List<ReleaseChangelog> = emptyList()
+    ) {
+        val changelog: String get() = changelogText
+    }
 }
 
 sealed class AppUpdateState {
     object Idle : AppUpdateState()
+
+    data class Checking(val isManual: Boolean = false) : AppUpdateState()
+
     data class Available(val info: UpdateChecker.UpdateInfo) : AppUpdateState()
-    data class Downloading(val progress: Int) : AppUpdateState()
-    data class ReadyToInstall(val downloadId: Long) : AppUpdateState()
+
+    data class UpToDate(
+        val currentVersion: String,
+        val latestReleaseTitle: String = "",
+        val latestReleaseDate: String = "",
+        val recentHighlights: List<String> = emptyList()
+    ) : AppUpdateState()
+
+    data class Downloading(
+        val progress: Int,
+        val bytesDownloaded: Long = 0L,
+        val totalBytes: Long = 0L,
+        val downloadId: Long = 0L,
+        val fileName: String = "",
+        val version: String = ""
+    ) : AppUpdateState()
+
+    data class ReadyToInstall(
+        val downloadId: Long,
+        val fileName: String = "",
+        val version: String = "",
+        val fileSizeFormatted: String = ""
+    ) : AppUpdateState()
+
+    data class Error(
+        val message: String,
+        val isManual: Boolean = false
+    ) : AppUpdateState()
 }
 
 typealias OtaState = AppUpdateState

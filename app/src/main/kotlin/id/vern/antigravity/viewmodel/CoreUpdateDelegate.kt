@@ -25,20 +25,14 @@ object CoreUpdateDelegate {
             }
             val currentVersion = pInfo.versionName ?: "1.0.0"
             val checker = UpdateChecker(context)
-            val info = checker.checkForUpdates(currentVersion, isManualCheck = isManualCheck)
-            if (info != null) {
-                AppUpdateState.Available(info)
-            } else {
-                if (isManualCheck) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, context.getString(R.string.ota_check_up_to_date), Toast.LENGTH_SHORT).show()
-                    }
-                }
-                null
-            }
+            checker.checkForUpdates(currentVersion, isManualCheck = isManualCheck)
         } catch (e: Exception) {
             Log.w("CoreUpdateDelegate", "Failed checking OTA updates: ${e.message}")
-            null
+            if (isManualCheck) {
+                AppUpdateState.Error("Failed to check for updates: ${e.localizedMessage ?: e.message}")
+            } else {
+                null
+            }
         }
     }
 
@@ -49,9 +43,19 @@ object CoreUpdateDelegate {
     ) {
         val checker = UpdateChecker(context)
         val downloadId = checker.startDownload(info)
-        checker.trackDownloadProgress(downloadId) { state ->
+        checker.trackDownloadProgress(downloadId, info) { state ->
             onProgress(state)
         }
+    }
+
+    fun cancelOtaDownload(context: Context, downloadId: Long) {
+        val checker = UpdateChecker(context)
+        checker.cancelDownload(downloadId)
+    }
+
+    fun snoozeOtaUpdate(context: Context) {
+        val checker = UpdateChecker(context)
+        checker.snoozeUpdate()
     }
 
     suspend fun checkForCoreEngineUpdate(

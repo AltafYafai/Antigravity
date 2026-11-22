@@ -669,5 +669,38 @@
     <string name="model_toast_requires_pro">%1$s memerlukan langganan Google AI Pro</string>
     <string name="model_toast_requires_ultra">%1$s memerlukan langganan Google AI Ultra</string>
     <string name="workspace_label">Ruang Kerja: %1$s</string>
+
+    <!-- Redesigned Updater Strings -->
+    <string name="ota_dialog_title">Pembaruan Baru Tersedia</string>
+    <string name="ota_dialog_subtitle">Versi baru Antigravity siap dipasang</string>
+    <string name="ota_version_diff_badge">%1$s → %2$s</string>
+    <string name="ota_meta_size">Ukuran: %1$s</string>
+    <string name="ota_meta_date">Dirilis: %1$s</string>
+    <string name="ota_meta_channel">Saluran: Stabil</string>
+    <string name="ota_changelog_section_title">Catatan Perubahan</string>
+    <string name="ota_tag_feature">Baru</string>
+    <string name="ota_tag_fix">Perbaikan</string>
+    <string name="ota_tag_improvement">Peningkatan</string>
+    <string name="ota_tag_security">Keamanan</string>
+    <string name="ota_btn_update_now">Perbarui Sekarang</string>
+    <string name="ota_btn_later">Nanti</string>
+    <string name="ota_btn_cancel">Batal</string>
+    <string name="ota_downloading_title">Mengunduh Pembaruan</string>
+    <string name="ota_download_progress">%1$s dari %2$s (%3$d%%)</string>
+    <string name="ota_btn_cancel_download">Batalkan Unduhan</string>
+    <string name="ota_btn_hide_download">Jalankan di Latar Belakang</string>
+    <string name="ota_download_background_tip">Unduhan berjalan di latar belakang. Anda dapat tetap menggunakan Antigravity.</string>
+    <string name="ota_install_ready_title">Pembaruan Siap Dipasang</string>
+    <string name="ota_install_ready_subtitle">Versi %1$s telah diunduh dan diverifikasi</string>
+    <string name="ota_install_ready_details">Paket: %1$s • %2$s</string>
+    <string name="ota_install_ready_hint">Ketuk Pasang Sekarang untuk membuka penginstal paket Android. Data dan pengaturan Anda akan tetap aman.</string>
+    <string name="ota_btn_install_now">Pasang Sekarang</string>
+    <string name="ota_btn_open_files">Buka di Berkas</string>
+    <string name="ota_up_to_date_title">Aplikasi Sudah Versi Terbaru</string>
+    <string name="ota_up_to_date_subtitle">Antigravity %1$s adalah versi terbaru saat ini</string>
+    <string name="ota_btn_done">Selesai</string>
+    <string name="ota_permission_dialog_title">Izin Diperlukan</string>
+    <string name="ota_permission_dialog_msg">Untuk memasang pembaruan secara langsung, Antigravity membutuhkan izin \"Pasang aplikasi tidak dikenal\". Silakan aktifkan di pengaturan sistem.</string>
+    <string name="ota_btn_open_settings">Buka Pengaturan</string>
 </resources>
 

@@ -126,18 +126,18 @@ jobs:
             COMMITS="- **Update**: Miscellaneous improvements and bug fixes"
           fi
 
-          cat <<EOF > dist/release_notes.md
-### Antigravity v${VERSION_NAME} (Build ${{ github.run_number }})
-
-#### What's Changed
-${COMMITS}
-
-#### Verification & Downloads
-- **Signed with Release Key**: V1, V2, and V3 signatures verified.
-- **Direct Download**: [\`Antigravity-latest.apk\`](https://github.com/\${{ github.repository }}/releases/download/v\${TAG_VER}/Antigravity-latest.apk)
-- **Versioned APK**: [\`Antigravity-v\${TAG_VER}-release.apk\`](https://github.com/\${{ github.repository }}/releases/download/v\${TAG_VER}/Antigravity-v\${TAG_VER}-release.apk)
-- **Checksums**: See attached \`checksums.sha256\`
-EOF
+          {
+            echo "### Antigravity v${VERSION_NAME} (Build ${{ github.run_number }})"
+            echo ""
+            echo "#### What's Changed"
+            echo "${COMMITS}"
+            echo ""
+            echo "#### Verification & Downloads"
+            echo "- **Signed with Release Key**: V1, V2, and V3 signatures verified."
+            echo "- **Direct Download**: [\`Antigravity-latest.apk\`](https://github.com/${{ github.repository }}/releases/download/v\${TAG_VER}/Antigravity-latest.apk)"
+            echo "- **Versioned APK**: [\`Antigravity-v\${TAG_VER}-release.apk\`](https://github.com/${{ github.repository }}/releases/download/v\${TAG_VER}/Antigravity-v\${TAG_VER}-release.apk)"
+            echo "- **Checksums**: See attached \`checksums.sha256\`"
+          } > dist/release_notes.md
 
           echo "VERSION_NAME=${VERSION_NAME}" >> "$GITHUB_ENV"
           echo "TAG_VER=${TAG_VER}" >> "$GITHUB_ENV"

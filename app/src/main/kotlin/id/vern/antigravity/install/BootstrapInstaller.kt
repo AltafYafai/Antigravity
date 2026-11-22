@@ -31,10 +31,13 @@ object BootstrapInstaller {
 
     private const val ASSET_GLIBC = "antigravity-glibc.zip"
     private val BOOTSTRAP_URLS = listOf(
-        "https://github.com/AltafYafai/Antigravity/releases/download/v1.0.1-6/bootstrap-aarch64.zip",
+        "https://github.com/AltafYafai/Antigravity/releases/download/v1.0.1-8/bootstrap-aarch64.zip",
         "https://github.com/KuatoDev/antigravity-bootstrap/releases/download/core-v1/bootstrap-aarch64.zip"
     )
-    private const val BOOTSTRAP_SHA256 = "6a740663ffaca4e63cb5e485c08b150828ef07fd6325f1f2146414a2d256855c"
+    private val VALID_BOOTSTRAP_SHA256S = setOf(
+        "bfee7a5ca625368081ba33fc626a1392afca9f137785538f4529f4f947aa3bb9",
+        "6a740663ffaca4e63cb5e485c08b150828ef07fd6325f1f2146414a2d256855c"
+    )
     private const val MARKER_FILE = ".installed"
     private const val ERROR_LOG_FILE = "bootstrap_error.log"
 
@@ -193,7 +196,7 @@ object BootstrapInstaller {
         for (local in candidates) {
             if (local.isFile && local.canRead() && local.length() > 10_000_000L) {
                 val localHash = calculateFileSha256(local)
-                if (localHash.equals(BOOTSTRAP_SHA256, ignoreCase = true) || local.length() > 50_000_000L) {
+                if (VALID_BOOTSTRAP_SHA256S.any { it.equals(localHash, ignoreCase = true) } || local.length() > 50_000_000L) {
                     onProgress("Extracting pre-installed Linux userspace bootstrap...", 0.9f)
                     local.inputStream().use { extractZipStream(it, targetDir) }
                     return
@@ -208,7 +211,7 @@ object BootstrapInstaller {
 
         for (url in BOOTSTRAP_URLS) {
             try {
-                downloadVerified(url, BOOTSTRAP_SHA256, zipFile) { p ->
+                downloadVerified(url, VALID_BOOTSTRAP_SHA256S, zipFile) { p ->
                     onProgress("Downloading Linux userspace bootstrap...", p * 0.85f)
                 }
                 downloadSuccess = true
@@ -240,14 +243,14 @@ object BootstrapInstaller {
         }
     }
 
-    private fun downloadVerified(url: String, expectedSha256: String, dest: File, onProgress: (Float) -> Unit) {
+    private fun downloadVerified(url: String, validSha256s: Set<String>, dest: File, onProgress: (Float) -> Unit) {
         val maxAttempts = 5
         var attempt = 0
         var lastException: Throwable? = null
 
         if (dest.isFile && dest.length() > 0) {
             val existingHash = calculateFileSha256(dest)
-            if (existingHash.equals(expectedSha256, ignoreCase = true)) {
+            if (validSha256s.any { it.equals(existingHash, ignoreCase = true) }) {
                 Log.i(TAG, "Pre-cached bootstrap archive at ${dest.absolutePath} is valid; skipping download.")
                 onProgress(1.0f)
                 return
@@ -317,7 +320,7 @@ object BootstrapInstaller {
                     416 -> {
                         finalConn.disconnect()
                         val hash = calculateFileSha256(dest)
-                        if (hash.equals(expectedSha256, ignoreCase = true)) {
+                        if (validSha256s.any { it.equals(hash, ignoreCase = true) }) {
                             onProgress(1.0f)
                             return
                         }
@@ -350,12 +353,12 @@ object BootstrapInstaller {
                 }
 
                 val actual = calculateFileSha256(dest)
-                if (actual.equals(expectedSha256, ignoreCase = true)) {
+                if (validSha256s.any { it.equals(actual, ignoreCase = true) }) {
                     onProgress(1.0f)
                     Log.i(TAG, "Bootstrap download verified successfully on attempt $attempt")
                     return
                 } else {
-                    Log.w(TAG, "Bootstrap checksum mismatch (got $actual, expected $expectedSha256). Deleting and retrying...")
+                    Log.w(TAG, "Bootstrap checksum mismatch (got $actual). Deleting and retrying...")
                     dest.delete()
                     throw IllegalStateException("Bootstrap download failed checksum verification")
                 }
@@ -624,6 +627,14 @@ object BootstrapInstaller {
             dest.mkdirs()
         } else {
             dest.parentFile?.mkdirs()
+            if (dest.exists() && dest.length() == entry.size && entry.size > 0L) {
+                if (dest.parentFile?.name == "bin" || dest.name.endsWith(".sh") || dest.name == "pkg") {
+                    dest.setReadable(true, false)
+                    dest.setExecutable(true, false)
+                    try { Os.chmod(dest.absolutePath, 493) } catch (e: Exception) {}
+                }
+                return
+            }
             if (dest.exists()) {
                 dest.delete()
             } else {

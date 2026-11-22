@@ -162,7 +162,7 @@ object GitHubAccountManager {
             GitHubAuthManager.applyCredentials(context, stored.toGitHubUser())
         }
 
-        AppLogger.i(TAG, "Saved GitHub account @${user.username} (active=$makeActive)")
+        AppLogger.d(TAG, "Saved GitHub account @${user.username} (active=$makeActive)")
         stored
     }
 
@@ -180,7 +180,7 @@ object GitHubAccountManager {
         }
         persist(context, target.username, updatedList)
         GitHubAuthManager.applyCredentials(context, target.toGitHubUser())
-        AppLogger.i(TAG, "Switched active GitHub account to @${target.username}")
+        AppLogger.d(TAG, "Switched active GitHub account to @${target.username}")
         true
     }
 
@@ -202,10 +202,10 @@ object GitHubAccountManager {
         if (newActiveUsername != null) {
             val next = accounts.first { it.username.equals(newActiveUsername, ignoreCase = true) }
             GitHubAuthManager.applyCredentials(context, next.toGitHubUser())
-            AppLogger.i(TAG, "Removed @${removed.username}, switched to next account @${next.username}")
+            AppLogger.d(TAG, "Removed @${removed.username}, switched to next account @${next.username}")
         } else {
             GitHubAuthManager.logout(context)
-            AppLogger.i(TAG, "Removed @${removed.username}, no remaining GitHub accounts")
+            AppLogger.d(TAG, "Removed @${removed.username}, no remaining GitHub accounts")
         }
         true
     }
@@ -226,15 +226,17 @@ object GitHubAccountManager {
             )
         )
         persist(context, stored.username, current)
-        AppLogger.i(TAG, "Imported existing GitHub credentials as initial account: @${stored.username}")
+        AppLogger.d(TAG, "Imported existing GitHub credentials as initial account: @${stored.username}")
     }
 
-    fun clearAll(context: Context) = synchronized(lock) {
-        val file = getStoreFile(context)
-        if (file.exists()) {
-            file.delete()
+    fun clearAll(context: Context) {
+        synchronized(lock) {
+            val file = getStoreFile(context)
+            if (file.exists()) {
+                file.delete()
+            }
+            GitHubAuthManager.logout(context)
+            AppLogger.d(TAG, "Cleared all GitHub accounts from store")
         }
-        GitHubAuthManager.logout(context)
-        AppLogger.i(TAG, "Cleared all GitHub accounts from store")
     }
 }

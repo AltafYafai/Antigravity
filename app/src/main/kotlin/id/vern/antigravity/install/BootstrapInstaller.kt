@@ -850,10 +850,13 @@ object BootstrapInstaller {
         val filesDir = context.filesDir
         val prefix = prefixDir(context)
         val engine = engineDir(context)
+        val homeDir = File(filesDir, "home").apply { mkdirs() }
 
         createAgyWrapper(filesDir, prefix, engine)
 
         patchGlibcResolvConf(context, engine)
+
+        id.vern.antigravity.executor.EngineExecutor.syncGitHubCredentials(context, homeDir)
 
         listOf(
             File(engine, "bin/agy"),

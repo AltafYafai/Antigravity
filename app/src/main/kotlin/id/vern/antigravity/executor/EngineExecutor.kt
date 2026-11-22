@@ -1,7 +1,9 @@
 package id.vern.antigravity.executor
 
 import android.content.Context
+import android.os.Environment
 import android.system.Os
+import android.util.Log
 import id.vern.antigravity.install.BootstrapInstaller
 import id.vern.antigravity.oauth.OAuthManager
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +14,8 @@ import java.io.FileOutputStream
 import java.io.InputStreamReader
 
 object EngineExecutor {
+
+    private const val TAG = "EngineExecutor"
 
     @Volatile
     private var isEnvironmentHealed = false
@@ -97,6 +101,7 @@ object EngineExecutor {
             pb.directory(targetCwd)
 
             val env = pb.environment()
+            syncGitHubCredentials(context, homeDir, env)
             env.remove("LD_PRELOAD")
             val prefixLib = File(filesDir, "usr/lib")
             val certFile = File(filesDir, "usr/etc/tls/cert.pem")
@@ -135,6 +140,7 @@ object EngineExecutor {
             env["ANTIGRAVITY_APP_DATA_DIR"] = File(homeDir, ".gemini/antigravity-cli").apply { mkdirs() }.absolutePath
 
             val process = pb.start()
+            activeCommandProcess = process
 
             val stdoutThread = Thread {
                 streamOutput(process.inputStream, false, onOutput)
@@ -151,6 +157,7 @@ object EngineExecutor {
                 process.waitFor()
             } finally {
                 try { process.outputStream.close() } catch (e: Exception) {}
+                activeCommandProcess = null
             }
             stdoutThread.join(1000)
             stderrThread.join(1000)
@@ -307,6 +314,7 @@ object EngineExecutor {
                 val validGitTemplate = File(prefixDir, "share/git-core/templates").apply { mkdirs() }
 
                 val env = pb.environment()
+                syncGitHubCredentials(context, homeDir, env)
                 env.remove("LD_PRELOAD")
                 env["PREFIX"] = prefixDir.absolutePath
                 env["HOME"] = homeDir.absolutePath
@@ -362,6 +370,7 @@ object EngineExecutor {
                 }
                 val validGitTemplate = File(prefixDir, "share/git-core/templates").apply { mkdirs() }
                 val env = pb.environment()
+                syncGitHubCredentials(context, homeDir, env)
                 env.remove("LD_PRELOAD")
                 env["PREFIX"] = prefixDir.absolutePath
                 env["HOME"] = homeDir.absolutePath
@@ -399,6 +408,9 @@ object EngineExecutor {
     @Volatile
     private var activeAgyProcess: Process? = null
 
+    @Volatile
+    private var activeCommandProcess: Process? = null
+
     fun isAgyRunning(): Boolean = activeAgyProcess != null
 
     fun stopAgyProcess() {
@@ -406,6 +418,78 @@ object EngineExecutor {
             activeAgyProcess?.destroyForcibly()
         } catch (e: Exception) {}
         activeAgyProcess = null
+
+        try {
+            activeCommandProcess?.destroyForcibly()
+        } catch (e: Exception) {}
+        activeCommandProcess = null
+    }
+
+    fun syncGitHubCredentials(context: Context, homeDir: File, env: MutableMap<String, String>? = null) {
+        try {
+            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val hostsCandidates = mutableListOf<File>()
+            if (downloadDir != null) {
+                hostsCandidates.add(File(downloadDir, "Andronix/.config/gh/hosts.yml"))
+                hostsCandidates.add(File(downloadDir, "Andronix/hosts.yml"))
+                hostsCandidates.add(File(downloadDir, ".config/gh/hosts.yml"))
+                hostsCandidates.add(File(downloadDir, "hosts.yml"))
+            }
+            hostsCandidates.add(File("/storage/emulated/0/Download/Andronix/.config/gh/hosts.yml"))
+            hostsCandidates.add(File("/storage/emulated/0/Download/Andronix/hosts.yml"))
+            hostsCandidates.add(File("/storage/emulated/0/Download/.config/gh/hosts.yml"))
+            hostsCandidates.add(File("/storage/emulated/0/Download/hosts.yml"))
+            hostsCandidates.add(File("/sdcard/download/.config/gh/hosts.yml"))
+            hostsCandidates.add(File("/sdcard/download/hosts.yml"))
+
+            val targetGhDir = File(homeDir, ".config/gh").apply { mkdirs() }
+            val targetHosts = File(targetGhDir, "hosts.yml")
+
+            for (src in hostsCandidates) {
+                if (src.isFile && src.canRead() && src.length() > 0) {
+                    if (!targetHosts.exists() || targetHosts.length() == 0L || src.lastModified() > targetHosts.lastModified()) {
+                        src.copyTo(targetHosts, overwrite = true)
+                        targetHosts.setReadable(true, false)
+                    }
+                    break
+                }
+            }
+
+            if (targetHosts.isFile && targetHosts.length() > 0) {
+                val content = targetHosts.readText(Charsets.UTF_8)
+                val tokenRegex = Regex("""oauth_token:\s*([^\s]+)""")
+                val match = tokenRegex.find(content)
+                if (match != null) {
+                    val token = match.groupValues[1].trim()
+                    if (token.isNotEmpty()) {
+                        env?.set("GITHUB_TOKEN", token)
+                        env?.set("GH_TOKEN", token)
+                    }
+                }
+            }
+
+            val gitConfigCandidates = mutableListOf<File>()
+            if (downloadDir != null) {
+                gitConfigCandidates.add(File(downloadDir, "Andronix/.gitconfig"))
+                gitConfigCandidates.add(File(downloadDir, ".gitconfig"))
+            }
+            gitConfigCandidates.add(File("/storage/emulated/0/Download/Andronix/.gitconfig"))
+            gitConfigCandidates.add(File("/storage/emulated/0/Download/.gitconfig"))
+            gitConfigCandidates.add(File("/sdcard/download/.gitconfig"))
+
+            val targetGitConfig = File(homeDir, ".gitconfig")
+            for (src in gitConfigCandidates) {
+                if (src.isFile && src.canRead() && src.length() > 0) {
+                    if (!targetGitConfig.exists() || targetGitConfig.length() == 0L || src.lastModified() > targetGitConfig.lastModified()) {
+                        src.copyTo(targetGitConfig, overwrite = true)
+                        targetGitConfig.setReadable(true, false)
+                    }
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed syncing GitHub credentials: ${e.message}")
+        }
     }
 
     fun writeToAgyStdin(input: String): Boolean {

@@ -37,9 +37,15 @@ object CloudCodeQuotaService {
     private const val CLOUDCODE_PROD_BASE = "https://cloudcode-pa.googleapis.com"
     private val CLOUDCODE_BASES = listOf(CLOUDCODE_DAILY_BASE, CLOUDCODE_PROD_BASE)
 
-    private const val QUOTA_URL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
-    private const val MODELS_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-    private const val TIER_URL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+    private const val QUOTA_PATH = "/v1internal:retrieveUserQuotaSummary"
+    private const val MODELS_PATH = "/v1internal:fetchAvailableModels"
+    private const val TIER_PATH = "/v1internal:loadCodeAssist"
+
+    data class EndpointCandidate(
+        val port: Int,
+        val csrf: String,
+        val preferredScheme: String = "http"
+    )
 
     private val cachedSslContext: SSLContext? by lazy {
         try {
@@ -60,12 +66,13 @@ object CloudCodeQuotaService {
         }
     }
 
-    private fun persistEndpoint(port: Int, csrf: String, context: Context? = null) {
+    private fun persistEndpoint(port: Int, csrf: String, httpsPort: Int = 0, context: Context? = null) {
         try {
             val json = JSONObject().apply {
                 put("port", port)
+                if (httpsPort > 0) put("https_port", httpsPort)
                 put("csrf_token", csrf)
-            }.toString()
+            }.toString(2)
 
             val files = mutableListOf<File>()
             try {
@@ -81,10 +88,19 @@ object CloudCodeQuotaService {
             files.add(File("/sdcard/Download/Andronix/.antigravity_endpoint"))
             files.add(File("/sdcard/Download/.antigravity_endpoint"))
             files.add(File("/sdcard/.antigravity_endpoint"))
+            files.add(File("/data/local/tmp/.antigravity_endpoint"))
+
+            val userHome = System.getProperty("user.home")
+            if (!userHome.isNullOrBlank()) {
+                files.add(File(userHome, ".antigravity_endpoint"))
+                files.add(File(userHome, "Download/.antigravity_endpoint"))
+                files.add(File(userHome, ".gemini/.antigravity_endpoint"))
+            }
 
             if (context != null) {
                 files.add(File(context.filesDir, ".antigravity_endpoint"))
                 files.add(File(context.filesDir, ".gemini/.antigravity_endpoint"))
+                files.add(File(context.filesDir, "home/.antigravity_endpoint"))
             }
 
             for (f in files) {
@@ -95,6 +111,9 @@ object CloudCodeQuotaService {
             }
         } catch (e: Exception) {}
     }
+
+    private fun persistEndpoint(port: Int, csrf: String, context: Context? = null) =
+        persistEndpoint(port, csrf, 0, context)
 
     private fun findCurlBinary(context: Context? = null): String {
         val candidates = mutableListOf<String>()
@@ -167,18 +186,8 @@ object CloudCodeQuotaService {
         return null
     }
 
-    private fun getCandidateEndpoints(context: Context? = null): List<Pair<Int, String>> {
-        val list = mutableListOf<Pair<Int, String>>()
-
-        val candidatePorts = listOf(45157, 45158, 45159, 45160)
-        for (port in candidatePorts) {
-            val liveToken = fetchCsrfTokenFromPort(port, context)
-            if (!liveToken.isNullOrBlank()) {
-                list.add(Pair(port, liveToken))
-                persistEndpoint(port, liveToken, context)
-                break
-            }
-        }
+    private fun getCandidateEndpoints(context: Context? = null): List<EndpointCandidate> {
+        val list = mutableListOf<EndpointCandidate>()
 
         val candidateFiles = mutableListOf<File>()
         try {
@@ -196,23 +205,104 @@ object CloudCodeQuotaService {
         candidateFiles.add(File("/sdcard/.antigravity_endpoint"))
         candidateFiles.add(File("/data/local/tmp/.antigravity_endpoint"))
 
+        val userHome = System.getProperty("user.home")
+        if (!userHome.isNullOrBlank()) {
+            candidateFiles.add(File(userHome, ".antigravity_endpoint"))
+            candidateFiles.add(File(userHome, "Download/.antigravity_endpoint"))
+            candidateFiles.add(File(userHome, ".gemini/.antigravity_endpoint"))
+        }
+
         if (context != null) {
             candidateFiles.add(File(context.filesDir, ".antigravity_endpoint"))
             candidateFiles.add(File(context.filesDir, ".gemini/.antigravity_endpoint"))
+            candidateFiles.add(File(context.filesDir, "home/.antigravity_endpoint"))
         }
+
+        var candidateTokenFromFiles = ""
 
         for (f in candidateFiles) {
             try {
                 if (f.isFile && f.canRead()) {
                     val content = f.readText(Charsets.UTF_8).trim()
                     val obj = JSONObject(content)
-                    val port = obj.optInt("port", 45157)
-                    val csrf = obj.optString("csrf_token", "")
+                    val httpPort = obj.optInt("port", 0)
+                    val httpsPort = obj.optInt("https_port", 0)
+                    val csrf = obj.optString("csrf_token", "").ifBlank {
+                        obj.optString("csrfToken", "")
+                    }
                     if (csrf.isNotBlank()) {
-                        list.add(Pair(port, csrf))
+                        if (candidateTokenFromFiles.isBlank()) {
+                            candidateTokenFromFiles = csrf
+                        }
+                        if (httpPort > 0) {
+                            list.add(EndpointCandidate(httpPort, csrf, "http"))
+                        }
+                        if (httpsPort > 0) {
+                            list.add(EndpointCandidate(httpsPort, csrf, "https"))
+                        }
+                        if (httpPort <= 0 && httpsPort <= 0) {
+                            list.add(EndpointCandidate(45939, csrf, "http"))
+                        }
                     }
                 }
             } catch (e: Exception) {}
+        }
+
+        val logCandidates = mutableListOf<File>()
+        if (context != null) {
+            logCandidates.add(File(context.filesDir, "home/.gemini/antigravity-cli/cli.log"))
+            logCandidates.add(File(context.filesDir, ".gemini/antigravity-cli/cli.log"))
+        }
+        logCandidates.add(File("/storage/emulated/0/Download/Andronix/.gemini/antigravity-cli/cli.log"))
+        logCandidates.add(File("/sdcard/Download/Andronix/.gemini/antigravity-cli/cli.log"))
+
+        val logDirs = mutableListOf(
+            File("/storage/emulated/0/Download/Andronix/.gemini/antigravity-cli/log"),
+            File("/storage/emulated/0/Download/Andronix/.gemini/antigravity-cli"),
+            File("/sdcard/Download/Andronix/.gemini/antigravity-cli/log"),
+            File("/home/altafyafai/.gemini/antigravity-cli/log"),
+            File("/home/altafyafai/.gemini/antigravity-cli")
+        )
+        if (!userHome.isNullOrBlank()) {
+            logDirs.add(File(userHome, ".gemini/antigravity-cli/log"))
+            logDirs.add(File(userHome, ".gemini/antigravity-cli"))
+        }
+        for (ld in logDirs) {
+            try {
+                if (ld.isDirectory) {
+                    val logs = ld.listFiles { f -> f.name.startsWith("cli") && f.name.endsWith(".log") }
+                    if (logs != null) {
+                        logCandidates.addAll(logs.sortedByDescending { it.lastModified() }.take(2))
+                    }
+                }
+            } catch (e: Exception) {}
+        }
+        for (lf in logCandidates.distinct()) {
+            try {
+                if (lf.isFile && lf.canRead()) {
+                    val tail = lf.readText(Charsets.UTF_8).takeLast(4096)
+                    val mHttp = Regex("""port at (\d+) for HTTP""").findAll(tail).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()
+                    val mHttps = Regex("""port at (\d+) for HTTPS""").findAll(tail).lastOrNull()?.groupValues?.get(1)?.toIntOrNull()
+                    val token = candidateTokenFromFiles.ifBlank { "caa720fa-9dc7-4b27-ad5e-f1af56c2e5eb" }
+                    if (mHttp != null && mHttp > 0) {
+                        list.add(0, EndpointCandidate(mHttp, token, "http"))
+                    }
+                    if (mHttps != null && mHttps > 0) {
+                        list.add(0, EndpointCandidate(mHttps, token, "https"))
+                    }
+                }
+            } catch (e: Exception) {}
+        }
+
+        val candidatePorts = listOf(45157, 45158, 45159, 45160, 45939, 43189)
+        for (port in candidatePorts) {
+            val liveToken = fetchCsrfTokenFromPort(port, context)
+            if (!liveToken.isNullOrBlank()) {
+                list.add(EndpointCandidate(port, liveToken, "http"))
+                list.add(EndpointCandidate(port, liveToken, "https"))
+                persistEndpoint(port, liveToken, context)
+                break
+            }
         }
 
         return list.distinct()
@@ -267,33 +357,32 @@ object CloudCodeQuotaService {
         }
     }
 
-    private fun queryLocalEndpointViaCurl(port: Int, csrf: String, rpcPath: String = "RetrieveUserQuotaSummary", requestBody: String = "{}", context: Context? = null): String? {
-        return try {
-            val curlBin = findCurlBinary(context)
-            val process = ProcessBuilder(
-                curlBin,
-                "-k", "-s",
-                "--max-time", "5",
-                "-X", "POST",
-                "-H", "Content-Type: application/json",
-                "-H", "x-codeium-csrf-token: $csrf",
-                "-H", "Connect-Protocol-Version: 1",
-                "-d", requestBody,
-                "https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/$rpcPath"
-            ).redirectErrorStream(true).start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            val exitCode = process.waitFor()
-            if (exitCode == 0 && output.isNotBlank() && (output.contains("\"groups\"") || output.contains("\"models\""))) {
-                Log.i(TAG, "curl query succeeded for local server port $port ($rpcPath)")
-                output
-            } else {
-                Log.w(TAG, "curl query failed (exit $exitCode, path $rpcPath): $output")
-                null
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "curl query execution error: ${e.message}")
-            null
+    private fun queryLocalEndpointViaCurl(port: Int, csrf: String, rpcPath: String = "RetrieveUserQuotaSummary", requestBody: String = "{}", context: Context? = null, preferredScheme: String = "http"): String? {
+        val curlBin = findCurlBinary(context)
+        val schemes = if (preferredScheme == "http") listOf("http", "https") else listOf("https", "http")
+        for (scheme in schemes) {
+            try {
+                val process = ProcessBuilder(
+                    curlBin,
+                    "-k", "-s",
+                    "--max-time", "4",
+                    "-X", "POST",
+                    "-H", "Content-Type: application/json",
+                    "-H", "Connect-Protocol-Version: 1",
+                    "-H", "x-antigravity-csrf-token: $csrf",
+                    "-H", "x-codeium-csrf-token: $csrf",
+                    "-d", requestBody,
+                    "$scheme://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/$rpcPath"
+                ).redirectErrorStream(true).start()
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                val exitCode = process.waitFor()
+                if (exitCode == 0 && output.isNotBlank() && (output.contains("\"groups\"") || output.contains("\"models\"") || output.contains("\"response\""))) {
+                    Log.i(TAG, "curl query succeeded for local server $scheme://127.0.0.1:$port ($rpcPath)")
+                    return output
+                }
+            } catch (e: Exception) {}
         }
+        return null
     }
 
     private fun orderedModelIds(mResp: JSONObject, modelsMap: JSONObject?): List<String> {
@@ -403,10 +492,13 @@ object CloudCodeQuotaService {
             val prov = modelProviderName(mObj)
             val isArgon = isArgonModel(k, title)
             val qi = mObj.optJSONObject("quotaInfo")
-            val rem = if (qi != null && qi.has("remainingFraction")) qi.optDouble("remainingFraction")
-                else if (isArgon) argonFraction
+            val groupRem = if (isArgon) argonFraction
                 else if (prov == "Google") geminiFraction
                 else thirdPartyFraction
+            val modelRem = if (qi != null && qi.has("remainingFraction")) qi.optDouble("remainingFraction") else null
+            val rem = if (modelRem != null && groupRem != null) {
+                kotlin.math.min(modelRem, groupRem)
+            } else modelRem ?: groupRem
             val resetT = qi?.optString("resetTime")?.takeIf { it.isNotBlank() }
                 ?: if (isArgon) argonReset
                 else if (prov == "Google") geminiReset
@@ -468,6 +560,8 @@ object CloudCodeQuotaService {
             var argonWeeklyReset: String? = null
             var thirdPartyWeeklyRem: Double? = null
             var thirdPartyWeeklyReset: String? = null
+            var thirdParty5hRem: Double? = null
+            var thirdParty5hReset: String? = null
 
             if (json.has("groups")) {
                 val groupsArr = json.getJSONArray("groups")
@@ -523,6 +617,9 @@ object CloudCodeQuotaService {
                                 if (bWin == "weekly" || bId.contains("weekly")) {
                                     thirdPartyWeeklyRem = bRem
                                     thirdPartyWeeklyReset = bReset
+                                } else if (bWin == "5h" || bId.contains("5h")) {
+                                    thirdParty5hRem = bRem
+                                    thirdParty5hReset = bReset
                                 }
                             }
 
@@ -695,12 +792,20 @@ object CloudCodeQuotaService {
                 emptyList()
             }
 
+            val effectiveGeminiRem = if (geminiWeeklyRem != null && gemini5hRem != null) {
+                kotlin.math.min(geminiWeeklyRem!!, gemini5hRem!!)
+            } else gemini5hRem ?: geminiWeeklyRem
+
+            val effectiveThirdPartyRem = if (thirdPartyWeeklyRem != null && thirdParty5hRem != null) {
+                kotlin.math.min(thirdPartyWeeklyRem!!, thirdParty5hRem!!)
+            } else thirdParty5hRem ?: thirdPartyWeeklyRem
+
             val availableModels = buildAvailableModels(
                 orderedIds, modelsMap,
-                gemini5hRem ?: geminiWeeklyRem, gemini5hReset ?: geminiWeeklyReset,
+                effectiveGeminiRem, gemini5hReset ?: geminiWeeklyReset,
                 if (!isArgonSupported) null else argonWeeklyRem,
                 if (!isArgonSupported) null else argonWeeklyReset,
-                thirdPartyWeeklyRem, thirdPartyWeeklyReset
+                effectiveThirdPartyRem, thirdParty5hReset ?: thirdPartyWeeklyReset
             )
 
             val summaryDesc = if (json.has("description")) json.optString("description") else null
@@ -721,84 +826,83 @@ object CloudCodeQuotaService {
         }
     }
 
+    private fun queryLocalEndpointDirect(
+        port: Int,
+        csrf: String,
+        rpcPath: String,
+        requestBody: String = "{}",
+        preferredScheme: String = "http"
+    ): String? {
+        val sc = cachedSslContext
+        val allHostsValid = HostnameVerifier { _, _ -> true }
+        val schemes = if (preferredScheme == "http") listOf("http", "https") else listOf("https", "http")
+
+        for (scheme in schemes) {
+            try {
+                val url = URL("$scheme://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/$rpcPath")
+                val conn = url.openConnection() as HttpURLConnection
+                if (conn is HttpsURLConnection && sc != null) {
+                    conn.sslSocketFactory = sc.socketFactory
+                    conn.hostnameVerifier = allHostsValid
+                }
+                conn.requestMethod = "POST"
+                conn.doOutput = true
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("Connect-Protocol-Version", "1")
+                conn.setRequestProperty("x-antigravity-csrf-token", csrf)
+                conn.setRequestProperty("x-codeium-csrf-token", csrf)
+
+                OutputStreamWriter(conn.outputStream).use { it.write(requestBody); it.flush() }
+
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    if (body.isNotBlank() && (body.contains("\"groups\"") || body.contains("\"models\"") || body.contains("\"response\""))) {
+                        Log.i(TAG, "Direct connection succeeded for local server $scheme://127.0.0.1:$port ($rpcPath)")
+                        return body
+                    }
+                } else {
+                    Log.w(TAG, "Direct local server $scheme://127.0.0.1:$port ($rpcPath) HTTP response: $code")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Direct local server $scheme://127.0.0.1:$port ($rpcPath) failed: ${e.message}")
+            }
+        }
+        return null
+    }
+
     private suspend fun fetchFromLocalLanguageServer(context: Context? = null, tier: CodeAssistTier? = null): UserQuotaSummary? {
         val candidates = getCandidateEndpoints(context)
-        for ((port, initialCsrf) in candidates) {
-            var activeCsrf = initialCsrf
+        for (cand in candidates) {
+            val port = cand.port
+            var activeCsrf = cand.csrf
+            val scheme = cand.preferredScheme
             var respStr: String? = null
             var modelsRespStr: String? = null
 
-            val sc = cachedSslContext
-            val allHostsValid = HostnameVerifier { hostname, session -> true }
-
-            try {
-                if (sc != null) {
-                    val url = URL("https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary")
-                    val conn = url.openConnection() as HttpsURLConnection
-                    conn.sslSocketFactory = sc.socketFactory
-                    conn.hostnameVerifier = allHostsValid
-                    conn.requestMethod = "POST"
-                    conn.doOutput = true
-                    conn.connectTimeout = 4000
-                    conn.readTimeout = 4000
-                    conn.setRequestProperty("Content-Type", "application/json")
-                    conn.setRequestProperty("x-codeium-csrf-token", activeCsrf)
-                    conn.setRequestProperty("Connect-Protocol-Version", "1")
-
-                    OutputStreamWriter(conn.outputStream).use { it.write("{}"); it.flush() }
-
-                    val code = conn.responseCode
-                    if (code in 200..299) {
-                        respStr = conn.inputStream.bufferedReader().use { it.readText() }
-                    } else {
-                        Log.w(TAG, "Local server candidate $port HTTP response: $code")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Local server candidate $port HttpsURLConnection failed: ${e.message}")
-            }
+            respStr = queryLocalEndpointDirect(port, activeCsrf, "RetrieveUserQuotaSummary", "{}", scheme)
 
             if (respStr.isNullOrBlank() || !respStr.contains("\"groups\"")) {
-                respStr = queryLocalEndpointViaCurl(port, activeCsrf, "RetrieveUserQuotaSummary", "{}", context)
+                respStr = queryLocalEndpointViaCurl(port, activeCsrf, "RetrieveUserQuotaSummary", "{}", context, scheme)
             }
 
             if (respStr.isNullOrBlank() || !respStr.contains("\"groups\"")) {
                 val liveCsrf = fetchCsrfTokenFromPort(port, context)
                 if (!liveCsrf.isNullOrBlank() && liveCsrf != activeCsrf) {
                     activeCsrf = liveCsrf
-                    persistEndpoint(port, liveCsrf, context)
-                    respStr = queryLocalEndpointViaCurl(port, activeCsrf, "RetrieveUserQuotaSummary", "{}", context)
+                    persistEndpoint(port, liveCsrf, context = context)
+                    respStr = queryLocalEndpointDirect(port, activeCsrf, "RetrieveUserQuotaSummary", "{}", scheme)
+                        ?: queryLocalEndpointViaCurl(port, activeCsrf, "RetrieveUserQuotaSummary", "{}", context, scheme)
                 }
             }
 
             if (!respStr.isNullOrBlank() && respStr.contains("\"groups\"")) {
-                try {
-                    if (sc != null) {
-                        val urlM = URL("https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/GetAvailableModels")
-                        val connM = urlM.openConnection() as HttpsURLConnection
-                        connM.sslSocketFactory = sc.socketFactory
-                        connM.hostnameVerifier = allHostsValid
-                        connM.requestMethod = "POST"
-                        connM.doOutput = true
-                        connM.connectTimeout = 4000
-                        connM.readTimeout = 4000
-                        connM.setRequestProperty("Content-Type", "application/json")
-                        connM.setRequestProperty("x-codeium-csrf-token", activeCsrf)
-                        connM.setRequestProperty("Connect-Protocol-Version", "1")
-
-                        OutputStreamWriter(connM.outputStream).use { it.write("{\"forceRefresh\": true}"); it.flush() }
-
-                        val codeM = connM.responseCode
-                        if (codeM in 200..299) {
-                            modelsRespStr = connM.inputStream.bufferedReader().use { it.readText() }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Local server candidate $port GetAvailableModels failed: ${e.message}")
-                }
+                modelsRespStr = queryLocalEndpointDirect(port, activeCsrf, "GetAvailableModels", "{\"forceRefresh\": true}", scheme)
 
                 if (modelsRespStr.isNullOrBlank()) {
-                    modelsRespStr = queryLocalEndpointViaCurl(port, activeCsrf, "GetAvailableModels", "{\"forceRefresh\": true}", context)
+                    modelsRespStr = queryLocalEndpointViaCurl(port, activeCsrf, "GetAvailableModels", "{\"forceRefresh\": true}", context, scheme)
                 }
 
                 var modelsFetchFailed = false
@@ -807,7 +911,10 @@ object CloudCodeQuotaService {
                         OAuthManager.refreshTokenIfNeeded(context)
                         val token = OAuthManager.getAccessToken(context)
                         if (!token.isNullOrBlank()) {
-                            modelsRespStr = makePostRequest(MODELS_URL, token)
+                            for (base in CLOUDCODE_BASES) {
+                                modelsRespStr = makePostRequest("$base$MODELS_PATH", token)
+                                if (!modelsRespStr.isNullOrBlank()) break
+                            }
                         }
                     } catch (e: Exception) {
                         Log.w(TAG, "Remote fetchAvailableModels retry failed: ${e.message}")
@@ -821,7 +928,7 @@ object CloudCodeQuotaService {
                 val summary = parseQuotaSummaryResponse(respStr, modelsRespStr, tier, modelsFetchFailed, context)
                 if (summary != null && summary.groups.isNotEmpty()) {
                     Log.i(TAG, "Successfully loaded live quota from local server on port $port (${summary.groups.size} groups, models: ${summary.availableModels.size})")
-                    persistEndpoint(port, activeCsrf, context)
+                    persistEndpoint(port, activeCsrf, context = context)
                     return summary
                 }
             }
@@ -854,25 +961,15 @@ object CloudCodeQuotaService {
 
     fun restartLocalLanguageServer(context: Context? = null) {
         val candidates = getCandidateEndpoints(context)
-        for ((port, csrf) in candidates) {
+        for (cand in candidates) {
             try {
-                val sc = cachedSslContext ?: continue
-                val url = URL("https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/Restart")
-                val conn = url.openConnection() as HttpsURLConnection
-                conn.sslSocketFactory = sc.socketFactory
-                conn.hostnameVerifier = HostnameVerifier { hostname, session -> true }
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.connectTimeout = 3000
-                conn.readTimeout = 3000
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("x-codeium-csrf-token", csrf)
-                conn.setRequestProperty("Connect-Protocol-Version", "1")
-                OutputStreamWriter(conn.outputStream).use { it.write("{}"); it.flush() }
-                val code = conn.responseCode
-                Log.i(TAG, "Notified LanguageServer on port $port to restart (HTTP $code)")
+                val res = queryLocalEndpointDirect(cand.port, cand.csrf, "Restart", "{}", cand.preferredScheme)
+                    ?: queryLocalEndpointViaCurl(cand.port, cand.csrf, "Restart", "{}", context, cand.preferredScheme)
+                if (res != null) {
+                    Log.i(TAG, "Notified LanguageServer on port ${cand.port} to restart")
+                }
             } catch (e: Exception) {
-
+                Log.w(TAG, "Failed to restart LanguageServer on port ${cand.port}: ${e.message}")
             }
         }
     }
@@ -890,58 +987,26 @@ object CloudCodeQuotaService {
         val token = OAuthManager.getAccessToken(context)
 
         if (!token.isNullOrBlank()) {
-            try {
-
-                val modelsRespStr = makePostRequest(MODELS_URL, token)
-                var geminiRemainingFraction: Double? = null
-                var geminiResetTime: String? = null
-
-                if (modelsRespStr != null) {
-                    val modelsJson = JSONObject(modelsRespStr)
-                    if (modelsJson.has("models")) {
-                        val mObjMap = modelsJson.getJSONObject("models")
-                        val keys = mObjMap.keys()
-                        while (keys.hasNext()) {
-                            val mid = keys.next()
-                            val mObj = mObjMap.getJSONObject(mid)
-                            val providerRaw = mObj.optString("modelProvider", "")
-                            if (providerRaw == "MODEL_PROVIDER_GOOGLE" && mObj.has("quotaInfo")) {
-                                val qi = mObj.getJSONObject("quotaInfo")
-                                val isArgon = isArgonModel(mid)
-                                val isTarget = !isArgon && AgyModelsService.isRealAiModel(mid, modelTitle(mObj, mid))
-                                if (isTarget) {
-                                    val rem = if (qi.has("remainingFraction")) qi.optDouble("remainingFraction") else 0.0
-                                    if (geminiRemainingFraction == null || rem < geminiRemainingFraction!!) {
-                                        geminiRemainingFraction = rem
-                                    }
-                                    if (qi.has("resetTime")) {
-                                        val rt = qi.optString("resetTime").takeIf { it.isNotBlank() }
-                                        if (rt != null && geminiResetTime == null) {
-                                            geminiResetTime = rt
-                                        }
-                                    }
-                                }
-                            }
+            for (base in CLOUDCODE_BASES) {
+                try {
+                    val modelsRespStr = makePostRequest("$base$MODELS_PATH", token)
+                    val quotaRespStr = makePostRequest("$base$QUOTA_PATH", token)
+                    if (quotaRespStr != null) {
+                        val summary = parseQuotaSummaryResponse(
+                            respStr = quotaRespStr,
+                            modelsRespStr = modelsRespStr,
+                            tier = tier,
+                            modelsFetchFailed = modelsRespStr == null,
+                            context = context
+                        )
+                        if (summary != null && summary.groups.isNotEmpty()) {
+                            Log.i(TAG, "Successfully loaded live quota from Google Cloud Code API ($base) for current token (${summary.groups.size} groups)")
+                            return@withContext summary
                         }
                     }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to load live quota from Google Cloud Code API ($base): ${e.message}")
                 }
-
-                val quotaRespStr = makePostRequest(QUOTA_URL, token)
-                if (quotaRespStr != null) {
-                    val summary = parseQuotaSummaryResponse(
-                        respStr = quotaRespStr,
-                        modelsRespStr = modelsRespStr,
-                        tier = tier,
-                        modelsFetchFailed = modelsRespStr == null,
-                        context = context
-                    )
-                    if (summary != null && summary.groups.isNotEmpty()) {
-                        Log.i(TAG, "Successfully loaded live quota from Google Cloud Code API for current token (${summary.groups.size} groups)")
-                        return@withContext summary
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to load live quota from Google Cloud Code API: ${e.message}")
             }
         }
 
@@ -952,60 +1017,62 @@ object CloudCodeQuotaService {
         OAuthManager.refreshTokenIfNeeded(context)
         val token = OAuthManager.getAccessToken(context) ?: return@withContext null
 
-        try {
-            val respStr = makePostRequest(TIER_URL, token) ?: return@withContext null
-            val json = JSONObject(respStr)
+        for (base in CLOUDCODE_BASES) {
+            try {
+                val respStr = makePostRequest("$base$TIER_PATH", token) ?: continue
+                val json = JSONObject(respStr)
 
-            var curTier = TierInfo()
-            if (json.has("currentTier")) {
-                val cObj = json.getJSONObject("currentTier")
-                curTier = TierInfo(
-                    id = cObj.optString("id", ""),
-                    name = cObj.optString("name", "Gemini Code Assist"),
-                    description = cObj.optString("description", ""),
-                    upgradeSubscriptionUri = cObj.optString("upgradeSubscriptionUri", ""),
-                    upgradeSubscriptionText = cObj.optString("upgradeSubscriptionText", "")
-                )
-            } else if (json.has("allowedTiers")) {
-                val arr = json.getJSONArray("allowedTiers")
-                if (arr.length() > 0) {
-                    val cObj = arr.getJSONObject(0)
+                var curTier = TierInfo()
+                if (json.has("currentTier")) {
+                    val cObj = json.getJSONObject("currentTier")
                     curTier = TierInfo(
-                        id = cObj.optString("id", "standard-tier"),
+                        id = cObj.optString("id", ""),
                         name = cObj.optString("name", "Gemini Code Assist"),
                         description = cObj.optString("description", ""),
                         upgradeSubscriptionUri = cObj.optString("upgradeSubscriptionUri", ""),
                         upgradeSubscriptionText = cObj.optString("upgradeSubscriptionText", "")
                     )
+                } else if (json.has("allowedTiers")) {
+                    val arr = json.getJSONArray("allowedTiers")
+                    if (arr.length() > 0) {
+                        val cObj = arr.getJSONObject(0)
+                        curTier = TierInfo(
+                            id = cObj.optString("id", "standard-tier"),
+                            name = cObj.optString("name", "Gemini Code Assist"),
+                            description = cObj.optString("description", ""),
+                            upgradeSubscriptionUri = cObj.optString("upgradeSubscriptionUri", ""),
+                            upgradeSubscriptionText = cObj.optString("upgradeSubscriptionText", "")
+                        )
+                    }
                 }
-            }
 
-            var paidTier: TierInfo? = null
-            if (json.has("paidTier")) {
-                val pObj = json.getJSONObject("paidTier")
-                paidTier = TierInfo(
-                    id = pObj.optString("id", ""),
-                    name = pObj.optString("name", "Google AI Pro"),
-                    description = pObj.optString("description", ""),
-                    upgradeSubscriptionUri = pObj.optString("upgradeSubscriptionUri", ""),
-                    upgradeSubscriptionText = pObj.optString("upgradeSubscriptionText", "")
-                )
-            }
+                var paidTier: TierInfo? = null
+                if (json.has("paidTier")) {
+                    val pObj = json.getJSONObject("paidTier")
+                    paidTier = TierInfo(
+                        id = pObj.optString("id", ""),
+                        name = pObj.optString("name", "Google AI Pro"),
+                        description = pObj.optString("description", ""),
+                        upgradeSubscriptionUri = pObj.optString("upgradeSubscriptionUri", ""),
+                        upgradeSubscriptionText = pObj.optString("upgradeSubscriptionText", "")
+                    )
+                }
 
-            val resultTier = CodeAssistTier(currentTier = curTier, paidTier = paidTier)
-            val email = OAuthManager.getUserEmail(context)
-            if (!email.isNullOrBlank()) {
-                id.vern.antigravity.oauth.AccountManager.updateAccountTier(
-                    context,
-                    email,
-                    resultTier.normalizedTierString
-                )
+                val resultTier = CodeAssistTier(currentTier = curTier, paidTier = paidTier)
+                val email = OAuthManager.getUserEmail(context)
+                if (!email.isNullOrBlank()) {
+                    id.vern.antigravity.oauth.AccountManager.updateAccountTier(
+                        context,
+                        email,
+                        resultTier.normalizedTierString
+                    )
+                }
+                return@withContext resultTier
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching code assist tier from $base: ${e.message}", e)
             }
-            resultTier
-        } catch (e: Exception) {
-            Log.e(TAG, "Error fetching code assist tier: ${e.message}", e)
-            null
         }
+        null
     }
 }
 

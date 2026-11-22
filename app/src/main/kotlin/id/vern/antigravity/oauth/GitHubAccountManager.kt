@@ -117,8 +117,11 @@ object GitHubAccountManager {
             root.put("accounts", arr)
             file.parentFile?.mkdirs()
             file.writeText(root.toString(2), Charsets.UTF_8)
-            file.setReadable(true, false)
-            file.setWritable(true, false)
+            file.setReadable(false, false)
+            file.setReadable(true, true)
+            file.setWritable(false, false)
+            file.setWritable(true, true)
+            try { android.system.Os.chmod(file.absolutePath, 384) } catch (e: Exception) {}
         } catch (e: Exception) {
             AppLogger.e(TAG, "Failed to persist GitHub accounts: ${e.message}")
         }

@@ -84,33 +84,7 @@ object GitHubAuthManager {
             )
         }
 
-        // Check external pre-staged candidate locations
-        val candidates = mutableListOf<File>()
-        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        if (downloadDir != null) {
-            candidates.add(File(downloadDir, "Andronix/.config/gh/hosts.yml"))
-            candidates.add(File(downloadDir, "Andronix/hosts.yml"))
-            candidates.add(File(downloadDir, ".config/gh/hosts.yml"))
-            candidates.add(File(downloadDir, "hosts.yml"))
-        }
-        candidates.add(File("/storage/emulated/0/Download/Andronix/.config/gh/hosts.yml"))
-        candidates.add(File("/storage/emulated/0/Download/Andronix/hosts.yml"))
-        candidates.add(File("/storage/emulated/0/Download/hosts.yml"))
-        candidates.add(File("/sdcard/download/hosts.yml"))
-
-        for (candidate in candidates) {
-            if (candidate.isFile && candidate.canRead() && candidate.length() > 0) {
-                val token = readTokenFromHostsFile(candidate)
-                val username = readUsernameFromHostsFile(candidate) ?: "github_user"
-                if (!token.isNullOrBlank()) {
-                    return GitHubUser(
-                        username = username,
-                        token = token
-                    )
-                }
-            }
-        }
-
+        cleanupExternalTokenFiles()
         return null
     }
 
@@ -333,54 +307,60 @@ object GitHubAuthManager {
             	helper = !gh auth git-credential
         """.trimIndent() + "\n"
 
-        // Write internal config files
+        // Write internal config files strictly in private app sandbox (mode 0600)
         try {
             val filesDir = context.filesDir
             val homeDir = File(filesDir, "home").apply { mkdirs() }
             val ghDir = File(homeDir, ".config/gh").apply { mkdirs() }
             val hostsFile = File(ghDir, "hosts.yml")
             hostsFile.writeText(hostsContent, StandardCharsets.UTF_8)
-            hostsFile.setReadable(true, false)
-            try { Os.chmod(hostsFile.absolutePath, 420) } catch (e: Exception) {}
+            hostsFile.setReadable(false, false)
+            hostsFile.setReadable(true, true)
+            hostsFile.setWritable(false, false)
+            hostsFile.setWritable(true, true)
+            try { Os.chmod(hostsFile.absolutePath, 384) } catch (e: Exception) {} // 0600 (-rw-------)
 
             val gitConfigFile = File(homeDir, ".gitconfig")
             gitConfigFile.writeText(gitConfigContent, StandardCharsets.UTF_8)
-            gitConfigFile.setReadable(true, false)
-            try { Os.chmod(gitConfigFile.absolutePath, 420) } catch (e: Exception) {}
+            gitConfigFile.setReadable(false, false)
+            gitConfigFile.setReadable(true, true)
+            gitConfigFile.setWritable(false, false)
+            gitConfigFile.setWritable(true, true)
+            try { Os.chmod(gitConfigFile.absolutePath, 384) } catch (e: Exception) {} // 0600 (-rw-------)
         } catch (e: Exception) {
             Log.w(TAG, "Failed writing internal GitHub config: ${e.message}")
         }
 
-        // Mirror to shared external storage per user rule
+        // Scrub any legacy token/hosts files from public external storage
+        cleanupExternalTokenFiles()
+    }
+
+    fun cleanupExternalTokenFiles() {
         try {
-            val targets = listOf(
+            val externalTargets = listOf(
                 File("/storage/emulated/0/Download/Andronix/.config/gh/hosts.yml"),
                 File("/storage/emulated/0/Download/Andronix/hosts.yml"),
                 File("/home/altafyafai/Android/Download/.config/gh/hosts.yml"),
                 File("/home/altafyafai/Android/Download/hosts.yml"),
+                File("/home/altafyafai/Download/.config/gh/hosts.yml"),
                 File("/home/altafyafai/Download/hosts.yml"),
-                File("/sdcard/download/hosts.yml")
-            )
-            for (target in targets) {
-                target.parentFile?.mkdirs()
-                target.writeText(hostsContent, StandardCharsets.UTF_8)
-                target.setReadable(true, false)
-            }
-
-            val gitTargets = listOf(
+                File("/sdcard/download/.config/gh/hosts.yml"),
+                File("/sdcard/download/hosts.yml"),
+                File("/storage/emulated/0/Download/hosts.yml"),
                 File("/storage/emulated/0/Download/Andronix/.gitconfig"),
                 File("/home/altafyafai/Android/Download/.gitconfig"),
                 File("/home/altafyafai/Download/.gitconfig"),
                 File("/sdcard/download/.gitconfig")
             )
-            for (target in gitTargets) {
-                target.parentFile?.mkdirs()
-                target.writeText(gitConfigContent, StandardCharsets.UTF_8)
-                target.setReadable(true, false)
+            for (target in externalTargets) {
+                if (target.exists()) {
+                    try {
+                        target.delete()
+                    } catch (e: Exception) {}
+                }
             }
-            AppLogger.d("GitHubAuth", "Mirrored GitHub credentials and gitconfig to external storage")
         } catch (e: Exception) {
-            Log.w(TAG, "External mirroring of GitHub credentials skipped: ${e.message}")
+            Log.w(TAG, "Error cleaning external token files: ${e.message}")
         }
     }
 
@@ -404,6 +384,8 @@ object GitHubAuthManager {
         } catch (e: Exception) {
             Log.w(TAG, "Failed deleting internal hosts.yml: ${e.message}")
         }
+
+        cleanupExternalTokenFiles()
     }
 
     private fun readTokenFromHostsFile(file: File): String? {

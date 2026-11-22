@@ -1,6 +1,7 @@
 package id.vern.antigravity.install
 
 import android.content.Context
+import android.os.Environment
 import android.system.Os
 import android.util.Log
 import java.io.BufferedInputStream
@@ -343,6 +344,164 @@ object CoreUpdateManager {
                 backupFile.copyTo(agyBin, overwrite = true)
             }
             return Result.failure(e)
+        }
+    }
+
+    fun tryInstallLocalEngine(
+        context: Context,
+        onProgress: (Float, String) -> Unit
+    ): Boolean {
+        val engineDir = BootstrapInstaller.engineDir(context)
+        val agyBin = File(engineDir, "bin/agy")
+        val ldBin = File(engineDir, "glibc/lib/ld-linux-aarch64.so.1")
+        val libDir = File(engineDir, "glibc/lib")
+        val prefixLib = File(BootstrapInstaller.prefixDir(context), "lib")
+        val cacheDir = context.cacheDir
+
+        val stagingFile = File(cacheDir, "agy.staging")
+        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+
+        val agyCandidates = mutableListOf<File>()
+        if (downloadDir != null) {
+            agyCandidates.add(File(downloadDir, "Andronix/agy"))
+            agyCandidates.add(File(downloadDir, "agy"))
+        }
+        agyCandidates.add(File("/storage/emulated/0/Download/Andronix/agy"))
+        agyCandidates.add(File("/storage/emulated/0/Download/agy"))
+        agyCandidates.add(File("/sdcard/download/agy"))
+        agyCandidates.add(File("/sdcard/Download/Andronix/agy"))
+
+        var candidateFound: File? = null
+        for (f in agyCandidates) {
+            if (f.isFile && f.length() > 50_000_000L) {
+                candidateFound = f
+                break
+            }
+        }
+
+        if (candidateFound != null) {
+            try {
+                onProgress(0.75f, "Installing pre-staged Core Engine binary...")
+                stagingFile.delete()
+                candidateFound.copyTo(stagingFile, overwrite = true)
+                return applyStagingEngine(context, stagingFile, agyBin, ldBin, libDir, prefixLib, engineDir, onProgress)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed installing from local agy binary: ${e.message}")
+            }
+        }
+
+        val archiveCandidates = mutableListOf<File>()
+        if (downloadDir != null) {
+            archiveCandidates.add(File(downloadDir, "Andronix/core_update_arm64.tar.gz"))
+            archiveCandidates.add(File(downloadDir, "core_update_arm64.tar.gz"))
+        }
+        archiveCandidates.add(File("/storage/emulated/0/Download/Andronix/core_update_arm64.tar.gz"))
+        archiveCandidates.add(File("/storage/emulated/0/Download/core_update_arm64.tar.gz"))
+        archiveCandidates.add(File("/sdcard/download/core_update_arm64.tar.gz"))
+
+        for (tarGz in archiveCandidates) {
+            if (tarGz.isFile && tarGz.length() > 10_000_000L) {
+                try {
+                    onProgress(0.70f, "Extracting pre-staged Core Engine package...")
+                    stagingFile.delete()
+                    var extracted = extractTarGzMember(tarGz, "antigravity", stagingFile)
+                    if (!extracted) {
+                        val tarBin = File(BootstrapInstaller.prefixDir(context), "bin/tar")
+                        if (tarBin.isFile) {
+                            val pb = ProcessBuilder(
+                                tarBin.absolutePath,
+                                "-xzf",
+                                tarGz.absolutePath,
+                                "-C",
+                                cacheDir.absolutePath,
+                                "antigravity"
+                            )
+                            pb.start().waitFor()
+                            val fallbackFile = File(cacheDir, "antigravity")
+                            if (fallbackFile.isFile) {
+                                fallbackFile.copyTo(stagingFile, overwrite = true)
+                                fallbackFile.delete()
+                                extracted = true
+                            }
+                        }
+                    }
+                    if (extracted && stagingFile.isFile && stagingFile.length() > 50_000_000L) {
+                        return applyStagingEngine(context, stagingFile, agyBin, ldBin, libDir, prefixLib, engineDir, onProgress)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed extracting local archive ${tarGz.absolutePath}: ${e.message}")
+                }
+            }
+        }
+
+        return false
+    }
+
+    private fun applyStagingEngine(
+        context: Context,
+        stagingFile: File,
+        agyBin: File,
+        ldBin: File,
+        libDir: File,
+        prefixLib: File,
+        engineDir: File,
+        onProgress: (Float, String) -> Unit
+    ): Boolean {
+        try {
+            val header = ByteArray(4)
+            FileInputStream(stagingFile).use { it.read(header) }
+            if (header[0] != 0x7F.toByte() || header[1] != 'E'.code.toByte() || header[2] != 'L'.code.toByte() || header[3] != 'F'.code.toByte()) {
+                return false
+            }
+
+            stagingFile.setReadable(true, false)
+            stagingFile.setExecutable(true, false)
+            try { Os.chmod(stagingFile.absolutePath, 493) } catch (e: Exception) {}
+
+            onProgress(0.88f, "Applying Android platform syscall patches...")
+            CoreBinaryPatcher.patchBinary(context, stagingFile)
+
+            onProgress(0.90f, "Installing Core Engine...")
+            agyBin.parentFile?.mkdirs()
+            stagingFile.copyTo(agyBin, overwrite = true)
+            agyBin.setReadable(true, false)
+            agyBin.setExecutable(true, false)
+            try { Os.chmod(agyBin.absolutePath, 493) } catch (e: Exception) {}
+
+            val tmpAgy = File(context.filesDir, "tmp/engine/bin/agy")
+            if (tmpAgy.parentFile?.exists() == true) {
+                try {
+                    agyBin.copyTo(tmpAgy, overwrite = true)
+                    tmpAgy.setReadable(true, false)
+                    tmpAgy.setExecutable(true, false)
+                    try { Os.chmod(tmpAgy.absolutePath, 493) } catch (e: Exception) {}
+                } catch (e: Exception) {}
+            }
+
+            BootstrapInstaller.patchGlibcResolvConf(context, engineDir)
+
+            onProgress(0.95f, "Running verification smoke test...")
+            val libPaths = listOf(libDir.absolutePath, prefixLib.absolutePath)
+                .filter { File(it).exists() }
+                .joinToString(":")
+            val pb = ProcessBuilder(ldBin.absolutePath, "--library-path", libPaths, agyBin.absolutePath, "--version")
+            pb.environment().remove("LD_PRELOAD")
+            val proc = pb.start()
+            val verifyOut = proc.inputStream.bufferedReader().readText().trim()
+            val exitCode = proc.waitFor()
+
+            if (exitCode == 0) {
+                if (stagingFile.exists()) stagingFile.delete()
+                File(engineDir, ".engine_version").writeText("1.5.3")
+                onProgress(1.0f, "Core engine ready (offline pre-staged)!")
+                return true
+            } else {
+                Log.w(TAG, "Smoke test for local engine failed: $verifyOut")
+                return false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed applying staging engine: ${e.message}", e)
+            return false
         }
     }
 

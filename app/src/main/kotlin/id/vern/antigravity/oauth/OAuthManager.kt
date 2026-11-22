@@ -3,6 +3,7 @@ package id.vern.antigravity.oauth
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
 import android.util.Base64
 import android.util.Log
 import id.vern.antigravity.util.AppLogger
@@ -90,7 +91,30 @@ migrations:  {
             File(homeDir, ".gemini/antigravity-cli"),
             File(homeDir, ".gemini/antigravity-app")
         )
-        return dirs
+
+        try {
+            val extDl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (extDl != null) {
+                dirs.add(File(extDl, "Andronix/.gemini/antigravity-cli"))
+                dirs.add(File(extDl, "Andronix/.gemini"))
+                dirs.add(File(extDl, "Andronix"))
+                dirs.add(File(extDl, ".gemini/antigravity-cli"))
+                dirs.add(File(extDl, ".gemini"))
+                dirs.add(extDl)
+            }
+        } catch (e: Exception) {}
+
+        dirs.add(File("/storage/emulated/0/Download/Andronix/.gemini/antigravity-cli"))
+        dirs.add(File("/storage/emulated/0/Download/Andronix/.gemini"))
+        dirs.add(File("/storage/emulated/0/Download/Andronix"))
+        dirs.add(File("/storage/emulated/0/Download/.gemini/antigravity-cli"))
+        dirs.add(File("/storage/emulated/0/Download/.gemini"))
+        dirs.add(File("/storage/emulated/0/Download"))
+        dirs.add(File("/sdcard/download/.gemini/antigravity-cli"))
+        dirs.add(File("/sdcard/download"))
+        dirs.add(File("/sdcard/.gemini/antigravity-cli"))
+        dirs.add(File("/sdcard/.gemini"))
+        return dirs.distinct()
     }
 
     private fun getAllTokenTargets(context: Context): List<File> {

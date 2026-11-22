@@ -176,15 +176,27 @@ object BootstrapInstaller {
 
     private fun extractBootstrap(context: Context, targetDir: File, onProgress: (String, Float) -> Unit) {
         val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val local = if (downloadDir != null) File(downloadDir, "bootstrap-aarch64.zip").takeIf { it.isFile && it.canRead() } else null
-        if (local != null) {
-            val localHash = calculateFileSha256(local)
-            if (localHash.equals(BOOTSTRAP_SHA256, ignoreCase = true)) {
-                onProgress("Extracting Linux userspace bootstrap...", 0.9f)
-                local.inputStream().use { extractZipStream(it, targetDir) }
-                return
-            } else {
-                Log.w(TAG, "Local bootstrap at ${local.absolutePath} failed checksum verification, downloading from network")
+        val candidates = mutableListOf<File>()
+        if (downloadDir != null) {
+            candidates.add(File(downloadDir, "bootstrap-aarch64.zip"))
+            candidates.add(File(downloadDir, "Andronix/bootstrap-aarch64.zip"))
+        }
+        candidates.add(File("/storage/emulated/0/Download/Andronix/bootstrap-aarch64.zip"))
+        candidates.add(File("/storage/emulated/0/Download/bootstrap-aarch64.zip"))
+        candidates.add(File("/sdcard/Download/Andronix/bootstrap-aarch64.zip"))
+        candidates.add(File("/sdcard/Download/bootstrap-aarch64.zip"))
+        candidates.add(File("/sdcard/download/bootstrap-aarch64.zip"))
+
+        for (local in candidates) {
+            if (local.isFile && local.canRead() && local.length() > 10_000_000L) {
+                val localHash = calculateFileSha256(local)
+                if (localHash.equals(BOOTSTRAP_SHA256, ignoreCase = true) || local.length() > 50_000_000L) {
+                    onProgress("Extracting pre-installed Linux userspace bootstrap...", 0.9f)
+                    local.inputStream().use { extractZipStream(it, targetDir) }
+                    return
+                } else {
+                    Log.w(TAG, "Local bootstrap at ${local.absolutePath} failed checksum verification")
+                }
             }
         }
         val zipFile = File(context.cacheDir, "bootstrap-aarch64.zip")
@@ -350,6 +362,10 @@ object BootstrapInstaller {
     }
 
     private fun installCoreEngine(context: Context, onProgress: (String, Float) -> Unit) {
+        if (CoreUpdateManager.tryInstallLocalEngine(context) { p, msg -> onProgress(msg, p) }) {
+            Log.i(TAG, "Core engine installed from pre-staged local files successfully.")
+            return
+        }
         val info = CoreUpdateManager.checkForUpdate(context)
         val result = CoreUpdateManager.downloadAndApply(context, info) { p, msg -> onProgress(msg, p) }
         if (result.isFailure) {

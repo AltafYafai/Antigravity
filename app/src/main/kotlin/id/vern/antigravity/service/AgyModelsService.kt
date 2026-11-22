@@ -42,10 +42,35 @@ object AgyModelsService {
     val EFFORT_LEVELS = listOf("Low", "Medium", "High", "XHigh", "Max")
     private val EFFORT_SUFFIXES = listOf("-low", "-medium", "-high", "-xhigh", "-max")
 
+    fun invalidateCache() {
+        cachedModelsResult = null
+        lastQueryTimeMs = 0L
+    }
+
+    fun isRealAiModel(modelId: String, displayName: String = ""): Boolean {
+        val cleanId = modelId.trim().lowercase()
+        val cleanName = displayName.trim().lowercase()
+        if (cleanId.isEmpty()) return false
+
+        if (cleanId.startsWith("chat_") || cleanId.startsWith("chat-") || cleanName.startsWith("chat_") || cleanName.startsWith("chat-")) return false
+        if (cleanId.startsWith("tab_") || cleanId.startsWith("tab-") || cleanName.startsWith("tab_") || cleanName.startsWith("tab-")) return false
+        if (cleanId.contains("internal") || cleanName.contains("internal")) return false
+        if (cleanId.contains("embedding") || cleanName.contains("embedding")) return false
+        if (cleanId.endsWith("-disabled") || cleanId.endsWith("_disabled") || cleanName.endsWith("-disabled")) return false
+        if (cleanId.startsWith("debug") || cleanName.startsWith("debug")) return false
+
+        val knownAiPrefixes = listOf("gemini", "claude", "gpt", "o1", "o3", "o4", "deepseek", "llama", "mistral", "qwen", "argon", "hydrogen", "neon", "orchestrator")
+        val isKnownAi = knownAiPrefixes.any { cleanId.contains(it) || cleanName.contains(it) }
+        val provider = providerForDisplayName(displayName).ifBlank { providerForDisplayName(cleanId) }
+        val hasKnownProvider = provider == "Google" || provider == "Anthropic" || provider == "OpenAI"
+
+        return isKnownAi || hasKnownProvider
+    }
+
     fun providerForDisplayName(displayName: String): String = when {
-        displayName.startsWith("Gemini", ignoreCase = true) -> "Google"
-        displayName.startsWith("Claude", ignoreCase = true) -> "Anthropic"
-        displayName.startsWith("GPT", ignoreCase = true) -> "OpenAI"
+        displayName.startsWith("Gemini", ignoreCase = true) || displayName.contains("gemini", ignoreCase = true) || displayName.contains("google", ignoreCase = true) || displayName.contains("argon", ignoreCase = true) || displayName.contains("hydrogen", ignoreCase = true) || displayName.contains("neon", ignoreCase = true) -> "Google"
+        displayName.startsWith("Claude", ignoreCase = true) || displayName.contains("claude", ignoreCase = true) || displayName.contains("anthropic", ignoreCase = true) -> "Anthropic"
+        displayName.startsWith("GPT", ignoreCase = true) || displayName.contains("gpt", ignoreCase = true) || displayName.contains("openai", ignoreCase = true) -> "OpenAI"
         else -> ""
     }
 
@@ -121,19 +146,26 @@ object AgyModelsService {
         }
     }
 
-    suspend fun fetchCliModels(context: Context): CliModelsResult = withContext(Dispatchers.IO) {
+    suspend fun fetchCliModels(context: Context, force: Boolean = false): CliModelsResult = withContext(Dispatchers.IO) {
+        if (force) {
+            invalidateCache()
+        }
         val now = System.currentTimeMillis()
-        cachedModelsResult?.let { cached ->
-            if (cached.models.isNotEmpty() && now - lastQueryTimeMs < CACHE_TTL_MS) {
-                return@withContext cached
+        if (!force) {
+            cachedModelsResult?.let { cached ->
+                if (cached.models.isNotEmpty() && now - lastQueryTimeMs < CACHE_TTL_MS) {
+                    return@withContext cached
+                }
             }
         }
 
         queryMutex.withLock {
             val lockedNow = System.currentTimeMillis()
-            cachedModelsResult?.let { cached ->
-                if (cached.models.isNotEmpty() && lockedNow - lastQueryTimeMs < CACHE_TTL_MS) {
-                    return@withContext cached
+            if (!force) {
+                cachedModelsResult?.let { cached ->
+                    if (cached.models.isNotEmpty() && lockedNow - lastQueryTimeMs < CACHE_TTL_MS) {
+                        return@withContext cached
+                    }
                 }
             }
 
@@ -145,7 +177,7 @@ object AgyModelsService {
 
             val json = runCliQuery(context, listOf("--output-format", "json", "models"))
             if (json.exitCode == 0) {
-                val fromJson = parseModelsJson(json.stdout)
+                val fromJson = parseModelsJson(json.stdout).filter { isRealAiModel(it.cliId, it.displayName) }
                 if (fromJson.isNotEmpty()) {
                     Log.i(TAG, "Loaded ${fromJson.size} models from `agy --output-format json models`")
                     val res = CliModelsResult(models = fromJson)
@@ -165,7 +197,7 @@ object AgyModelsService {
                 json
             }
             if (!isTimedOut && text.exitCode == 0) {
-                val fromText = parseModelsText(text.stdout)
+                val fromText = parseModelsText(text.stdout).filter { isRealAiModel(it.cliId, it.displayName) }
                 if (fromText.isNotEmpty()) {
                     Log.i(TAG, "Loaded ${fromText.size} models from `agy models`")
                     val res = CliModelsResult(models = fromText)
@@ -182,14 +214,16 @@ object AgyModelsService {
             val detail = json.stderrTail.ifBlank { text.stderrTail }
             val failResult = CliModelsResult(error = "cli-query-failed", detail = detail.ifBlank { null })
 
-            val prefsCached = decodeCliModels(
-                context.getSharedPreferences("antigravity_prefs", Context.MODE_PRIVATE)
-                    .getString("ag_cli_models_json", null).orEmpty()
-            )
-            if (prefsCached.isNotEmpty()) {
-                val res = CliModelsResult(models = prefsCached)
-                cachedModelsResult = res
-                return@withContext res
+            if (!force) {
+                val prefsCached = decodeCliModels(
+                    context.getSharedPreferences("antigravity_prefs", Context.MODE_PRIVATE)
+                        .getString("ag_cli_models_json", null).orEmpty()
+                ).filter { isRealAiModel(it.cliId, it.displayName) }
+                if (prefsCached.isNotEmpty()) {
+                    val res = CliModelsResult(models = prefsCached)
+                    cachedModelsResult = res
+                    return@withContext res
+                }
             }
 
             cachedModelsResult?.takeIf { it.models.isNotEmpty() } ?: failResult
@@ -292,6 +326,7 @@ object AgyModelsService {
         val rawName = obj.optString("label").ifBlank { obj.optString("name") }
             .ifBlank { obj.optString("displayName") }
             .ifBlank { obj.optString("title") }
+        if (!isRealAiModel(rawId, rawName)) return null
         val rawProvider = obj.optString("provider").ifBlank { obj.optString("modelProvider") }
         val rawEffort = obj.optString("effort").ifBlank { obj.optString("thinking") }
             .ifBlank { obj.optString("thinkingLevel") }
@@ -380,34 +415,74 @@ object AgyModelsService {
         }
     }
 
-    private val SLUG_TOKEN = Regex("[a-z][a-z0-9]*(?:[-.][a-z0-9]+)+")
+    private val SLUG_TOKEN = Regex("[a-z0-9]+(?:[-._][a-z0-9]+)+")
 
     fun parseModelsText(raw: String): List<CliModel> {
         val parsed = mutableListOf<CliModel>()
         for (line in raw.lines()) {
-            if (line.contains("://")) continue
-            val parts = line.split(Regex("[\t]{1,}|[ ]{2,}"))
-            val firstToken = parts.firstOrNull()?.trim().orEmpty()
-            val id = if (SLUG_TOKEN.matches(firstToken)) {
-                firstToken
+            val trimmedLine = line.trim()
+            if (trimmedLine.isEmpty()) continue
+            if (trimmedLine.contains("://")) continue
+            if (trimmedLine.startsWith("⠋") || trimmedLine.startsWith("⠙") || trimmedLine.startsWith("⠹") ||
+                trimmedLine.startsWith("⠸") || trimmedLine.startsWith("⠼") || trimmedLine.startsWith("⠴") ||
+                trimmedLine.startsWith("⠦") || trimmedLine.startsWith("⠧") || trimmedLine.startsWith("⠇") ||
+                trimmedLine.startsWith("⠏") || trimmedLine.contains("Fetching available models", ignoreCase = true)) continue
+            if (trimmedLine.contains("Navigate", ignoreCase = true) && trimmedLine.contains("Select", ignoreCase = true)) continue
+            if (trimmedLine.contains("esc to", ignoreCase = true) || trimmedLine.contains("Introducing", ignoreCase = true)) continue
+            if (trimmedLine.startsWith("↓") || trimmedLine.startsWith("↑")) continue
+            if (trimmedLine.startsWith("> /model") || trimmedLine.startsWith("/model")) continue
+
+            val cleanLine = trimmedLine.trimStart('>', '*', '-', '•', ' ').trim()
+            val parts = cleanLine.split(Regex("[\t]{1,}|[ ]{2,}")).map { it.trim() }.filter { it.isNotBlank() }
+            if (parts.isEmpty()) continue
+
+            val slugMatch = SLUG_TOKEN.find(cleanLine)?.value
+            val id: String
+            val explicitLabel: String?
+
+            if (parts.size >= 2) {
+                if (SLUG_TOKEN.matches(parts[0]) && !parts[0].contains(" ")) {
+                    id = parts[0]
+                    explicitLabel = parts[1]
+                } else if (SLUG_TOKEN.matches(parts[parts.lastIndex]) && !parts[parts.lastIndex].contains(" ")) {
+                    id = parts[parts.lastIndex]
+                    explicitLabel = parts.subList(0, parts.lastIndex).joinToString(" ")
+                } else if (slugMatch != null) {
+                    id = slugMatch
+                    explicitLabel = cleanLine.replace(slugMatch, "").trim()
+                } else {
+                    continue
+                }
             } else {
-                SLUG_TOKEN.findAll(line)
-                    .map { it.value }
-                    .firstOrNull { token -> token.any { it.isDigit() } }
-                    ?: continue
+                if (slugMatch != null) {
+                    id = slugMatch
+                    val rem = cleanLine.replace(slugMatch, "").trim()
+                    explicitLabel = rem.ifBlank { null }
+                } else {
+                    continue
+                }
             }
-            val explicitLabel = if (parts.size >= 2 && firstToken == id) parts[1].trim() else null
-            val displayName = explicitLabel?.let { splitDisplayName(it).first } ?: displayNameForId(id)
+
+            val cleanId = cleanModelId(id)
+            if (cleanId.isBlank() || cleanId.contains(" ")) continue
+
+            val (namePart, labelEffort) = if (explicitLabel != null) splitDisplayName(explicitLabel) else Pair("", null)
+            val displayName = cleanDisplayName(namePart.ifBlank { displayNameForId(cleanId) })
             if (displayName.isBlank()) continue
-            val effort = effortSuffixOf(id)
-            val label = explicitLabel ?: if (effort != null) "$displayName ($effort)" else displayName
+            if (!isRealAiModel(cleanId, displayName)) continue
+
+            val idEffort = effortSuffixOf(cleanId)
+            val effort = normalizeEffort(labelEffort) ?: idEffort ?: ""
+            val label = if (!explicitLabel.isNullOrBlank()) cleanDisplayName(explicitLabel) else if (effort.isNotEmpty()) "$displayName ($effort)" else displayName
+            val provider = providerForDisplayName(displayName).ifBlank { "Other" }
+
             parsed.add(
                 CliModel(
-                    cliId = id,
+                    cliId = cleanId,
                     displayName = displayName,
                     label = label,
-                    provider = providerForDisplayName(displayName).ifBlank { "Other" },
-                    effort = effort ?: "",
+                    provider = provider,
+                    effort = effort,
                     isDefault = line.contains("(default)", ignoreCase = true)
                 )
             )

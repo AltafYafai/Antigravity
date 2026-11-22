@@ -65,6 +65,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import id.vern.antigravity.R
 import id.vern.antigravity.data.CodeAssistTier
+import id.vern.antigravity.data.SubscriptionTierType
 import id.vern.antigravity.data.ModelAvailability
 import id.vern.antigravity.data.UserQuotaSummary
 import id.vern.antigravity.service.AgyModelsService
@@ -109,16 +110,17 @@ fun List<CliModel>.toDisplayAiModels(): List<DisplayAiModel> {
         val bare = variants.firstOrNull { it.effort.isEmpty() }
         val effortCliIds = variants.filter { it.effort.isNotEmpty() }
             .associate { it.effort to it.cliId }
+        val provider = first.provider.ifBlank { AgyModelsService.providerForDisplayName(first.displayName) }
         DisplayAiModel(
             id = first.displayName,
             name = first.displayName,
-            provider = first.provider,
+            provider = provider,
             description = "",
             descriptionRes = null,
-            iconRes = when (first.provider) {
-                "Google" -> R.drawable.ic_model_gemini
-                "Anthropic" -> R.drawable.ic_model_claude
-                "OpenAI" -> R.drawable.ic_model_gpt
+            iconRes = when {
+                provider.equals("Google", ignoreCase = true) || first.displayName.contains("Gemini", ignoreCase = true) -> R.drawable.ic_model_gemini
+                provider.equals("Anthropic", ignoreCase = true) || first.displayName.contains("Claude", ignoreCase = true) -> R.drawable.ic_model_claude
+                provider.equals("OpenAI", ignoreCase = true) || first.displayName.contains("GPT", ignoreCase = true) -> R.drawable.ic_model_gpt
                 else -> null
             },
             cliId = bare?.cliId,
@@ -133,13 +135,24 @@ internal fun getModelQuotaPercentage(
     summary: UserQuotaSummary?
 ): Pair<Int?, String?> {
     if (summary == null) return Pair(null, null)
-    val geminiGroup = summary.groups.firstOrNull { it.displayName.contains("gemini", ignoreCase = true) }
+    val matchingAvail = summary.availableModels.firstOrNull { it.matches(modelId) }
+    if (matchingAvail != null && matchingAvail.percentage != null) {
+        val sub = matchingAvail.resetTime?.let { id.vern.antigravity.service.CloudCodeQuotaService.formatSubtext(it) }
+        return Pair(matchingAvail.percentage, sub)
+    }
+    val geminiGroup = summary.groups.firstOrNull { it.displayName.contains("gemini", ignoreCase = true) && !it.displayName.contains("argon", ignoreCase = true) }
+    val argonGroup = summary.groups.firstOrNull { it.displayName.contains("argon", ignoreCase = true) }
     val thirdPartyGroup = summary.groups.firstOrNull {
         it.displayName.contains("claude", ignoreCase = true) || it.displayName.contains("gpt", ignoreCase = true)
     }
 
     return when {
-        modelId.contains("Flash", ignoreCase = true) -> {
+        modelId.contains("Argon", ignoreCase = true) -> {
+            val weeklyB = argonGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
+                ?: argonGroup?.buckets?.firstOrNull()
+            Pair(weeklyB?.percentage, weeklyB?.subtext)
+        }
+        modelId.contains("Flash", ignoreCase = true) || modelId.contains("Neon", ignoreCase = true) -> {
             val fiveHB = geminiGroup?.buckets?.firstOrNull { it.window == "5h" || it.bucketId.contains("5h") }
             val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
             if (fiveHB != null && weeklyB != null) {
@@ -150,19 +163,11 @@ internal fun getModelQuotaPercentage(
                 Pair(b?.percentage, b?.subtext)
             }
         }
-        modelId.contains("Argon", ignoreCase = true) -> {
+        modelId.contains("Carbon", ignoreCase = true) || modelId.contains("Gemini", ignoreCase = true) -> {
             val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
             Pair(weeklyB?.percentage, weeklyB?.subtext)
         }
-        modelId.contains("Carbon", ignoreCase = true) -> {
-            val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
-            Pair(weeklyB?.percentage, weeklyB?.subtext)
-        }
-        modelId.contains("Claude", ignoreCase = true) -> {
-            val b = thirdPartyGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
-            Pair(b?.percentage, b?.subtext)
-        }
-        modelId.contains("GPT", ignoreCase = true) -> {
+        modelId.contains("Claude", ignoreCase = true) || modelId.contains("GPT", ignoreCase = true) -> {
             val b = thirdPartyGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
             Pair(b?.percentage, b?.subtext)
         }
@@ -215,6 +220,35 @@ fun ModelSelectorDialog(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    Spacer(modifier = Modifier.weight(1f))
+                    val tierType = codeAssistTier?.tierType ?: SubscriptionTierType.FREE
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = when (tierType) {
+                            SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
+                            SubscriptionTierType.PRO -> AntigravityBlue.copy(alpha = 0.15f)
+                            SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    ) {
+                        Text(
+                            text = when (tierType) {
+                                SubscriptionTierType.ULTRA -> stringResource(R.string.account_tier_ultra)
+                                SubscriptionTierType.PRO -> stringResource(R.string.account_tier_pro)
+                                SubscriptionTierType.ENTERPRISE -> stringResource(R.string.account_tier_enterprise)
+                                else -> stringResource(R.string.account_tier_free)
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = when (tierType) {
+                                SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary
+                                SubscriptionTierType.PRO -> AntigravityBlue
+                                SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -227,9 +261,10 @@ fun ModelSelectorDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     displayedModels.forEach { model ->
-                        val isSelected = model.id == selectedModel ||
-                                (model.id.startsWith("Claude") && selectedModel.startsWith("Claude") && model.id == selectedModel) ||
-                                (model.id.startsWith("GPT") && selectedModel.startsWith("GPT") && model.id == selectedModel)
+                        val isSelected = model.id.equals(selectedModel, ignoreCase = true) ||
+                                model.name.equals(selectedModel, ignoreCase = true) ||
+                                model.cliId == selectedModel ||
+                                model.effortCliIds.values.contains(selectedModel)
                         val quotaModel = remember(model.id, userQuotaSummary) {
                             userQuotaSummary?.availableModels?.firstOrNull { it.matches(model.id) }
                         }
@@ -313,8 +348,9 @@ fun ModelSelectorDialog(
                                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                                 Spacer(modifier = Modifier.width(3.dp))
+                                                val lockLabel = stringResource(R.string.model_status_unavailable_account)
                                                 Text(
-                                                    text = stringResource(R.string.model_status_unavailable_account),
+                                                    text = lockLabel,
                                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )

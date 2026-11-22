@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -60,6 +61,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
 import id.vern.antigravity.oauth.OAuthManager
+import id.vern.antigravity.service.AgyModelsService
 import id.vern.antigravity.service.RuleItem
 import id.vern.antigravity.service.McpServerItem
 import id.vern.antigravity.ui.components.InstallationProgressDialog
@@ -133,6 +135,8 @@ import id.vern.antigravity.data.ThemeMode
 import id.vern.antigravity.data.ThemePreset
 import id.vern.antigravity.data.ModelAvailability
 import id.vern.antigravity.data.AvailableModelInfo
+import id.vern.antigravity.data.SubscriptionTierType
+import id.vern.antigravity.oauth.StoredAccount
 import id.vern.antigravity.ui.components.LogViewer
 import id.vern.antigravity.ui.theme.AntigravityBlue
 import id.vern.antigravity.ui.theme.AntigravityGreen
@@ -1936,35 +1940,37 @@ fun ModelsAndUsageSettingsPage(
             val availableModels = userQuotaSummary?.availableModels ?: emptyList()
             val effectiveModels = remember(availableModels, cliModels) {
                 if (cliModels.isNotEmpty()) {
-                    cliModels.map { cli ->
-                        val matchingAvail = availableModels.firstOrNull { avail ->
-                            avail.modelId.equals(cli.cliId, ignoreCase = true) ||
-                            avail.displayName.equals(cli.label, ignoreCase = true) ||
-                            avail.displayName.equals(cli.displayName, ignoreCase = true) ||
-                            avail.matches(cli.cliId)
+                    cliModels
+                        .filter { AgyModelsService.isRealAiModel(it.cliId, it.displayName) }
+                        .map { cli ->
+                            val matchingAvail = availableModels.firstOrNull { avail ->
+                                avail.modelId.equals(cli.cliId, ignoreCase = true) ||
+                                avail.displayName.equals(cli.label, ignoreCase = true) ||
+                                avail.displayName.equals(cli.displayName, ignoreCase = true) ||
+                                avail.matches(cli.cliId)
+                            }
+                            val pct = matchingAvail?.percentage ?: getModelQuotaPercentage(cli.cliId, userQuotaSummary).first
+                            val isArgon = cli.cliId.contains("argon", ignoreCase = true) || cli.displayName.contains("argon", ignoreCase = true)
+                            val resetT = matchingAvail?.resetTime ?: (
+                                if (isArgon) {
+                                    userQuotaSummary?.groups?.firstOrNull { it.displayName.contains("argon", ignoreCase = true) }?.buckets?.firstOrNull()?.resetTime
+                                } else {
+                                    userQuotaSummary?.groups?.firstOrNull { it.displayName.contains("gemini", ignoreCase = true) && !it.displayName.contains("argon", ignoreCase = true) }?.buckets?.firstOrNull()?.resetTime
+                                }
+                            )
+                            val availStatus = matchingAvail?.availability ?: ModelAvailability.AVAILABLE
+                            AvailableModelInfo(
+                                modelId = cli.cliId,
+                                displayName = cli.label.ifBlank { cli.displayName },
+                                provider = cli.provider.ifBlank { AgyModelsService.providerForDisplayName(cli.displayName).ifBlank { "Google" } },
+                                remainingFraction = pct?.let { it / 100.0 },
+                                resetTime = resetT,
+                                availability = availStatus
+                            )
                         }
-                        val pct = matchingAvail?.percentage ?: getModelQuotaPercentage(cli.cliId, userQuotaSummary).first
-                        val resetT = matchingAvail?.resetTime
-                        val availStatus = matchingAvail?.availability ?: ModelAvailability.AVAILABLE
-                        AvailableModelInfo(
-                            modelId = cli.cliId,
-                            displayName = cli.label.ifBlank { cli.displayName },
-                            provider = cli.provider.ifBlank { "Google" },
-                            remainingFraction = pct?.let { it / 100.0 },
-                            resetTime = resetT,
-                            availability = availStatus
-                        )
-                    }
                 } else {
                     availableModels
-                        .filter {
-                            it.displayName.isNotBlank() &&
-                            !it.displayName.startsWith("chat_", ignoreCase = true) &&
-                            !it.displayName.startsWith("tab_", ignoreCase = true) &&
-                            !it.modelId.startsWith("chat_", ignoreCase = true) &&
-                            !it.modelId.startsWith("tab_", ignoreCase = true) &&
-                            !it.modelId.contains("embedding", ignoreCase = true)
-                        }
+                        .filter { AgyModelsService.isRealAiModel(it.modelId, it.displayName) }
                 }
             }
 
@@ -2034,8 +2040,9 @@ fun ModelsAndUsageSettingsPage(
                                                 color = if ((m.percentage ?: 0) > 20) AntigravityGreen else MaterialTheme.colorScheme.error
                                             )
                                         } else if (m.resetTime != null) {
+                                            val countdown = id.vern.antigravity.service.CloudCodeQuotaService.formatResetCountdown(m.resetTime)
                                             Text(
-                                                text = stringResource(R.string.status_weekly_limit_reached),
+                                                text = "${stringResource(R.string.status_weekly_limit_reached)} · $countdown",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = FontWeight.Medium,
                                                 color = MaterialTheme.colorScheme.error
@@ -3489,6 +3496,8 @@ fun AccountSettingsPage(
     val userEmail by viewModel.userEmail.collectAsStateWithLifecycle()
     val userName by viewModel.userName.collectAsStateWithLifecycle()
     val userPicture by viewModel.userPicture.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val codeAssistTier by viewModel.codeAssistTier.collectAsStateWithLifecycle()
     val scrollState = rememberScrollState()
     val token: String? = remember(userEmail) { OAuthManager.getAccessToken(context) }
 
@@ -3543,15 +3552,55 @@ fun AccountSettingsPage(
                         }
                         Spacer(modifier = Modifier.width(14.dp))
                         Column {
-                            Text(
-                                text = if (userEmail != null) userName.ifBlank { "Google User" } else stringResource(R.string.account_not_signed_in),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = if (userEmail != null) userName.ifBlank { "Google User" } else stringResource(R.string.account_not_signed_in),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (userEmail != null) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    val tierType = codeAssistTier?.tierType ?: SubscriptionTierType.FREE
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = when (tierType) {
+                                            SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
+                                            SubscriptionTierType.PRO -> AntigravityBlue.copy(alpha = 0.15f)
+                                            SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
+                                            else -> MaterialTheme.colorScheme.surfaceVariant
+                                        }
+                                    ) {
+                                        Text(
+                                            text = when (tierType) {
+                                                SubscriptionTierType.ULTRA -> stringResource(R.string.account_tier_ultra)
+                                                SubscriptionTierType.PRO -> stringResource(R.string.account_tier_pro)
+                                                SubscriptionTierType.ENTERPRISE -> stringResource(R.string.account_tier_enterprise)
+                                                else -> stringResource(R.string.account_tier_free)
+                                            },
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            fontWeight = FontWeight.Bold,
+                                            color = when (tierType) {
+                                                SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary
+                                                SubscriptionTierType.PRO -> AntigravityBlue
+                                                SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary
+                                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            if (!userEmail.isNullOrBlank()) {
+                                Text(
+                                    text = userEmail ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             Text(
                                 text = if (userEmail != null) stringResource(R.string.status_authenticated) else stringResource(R.string.account_not_authenticated),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (userEmail != null) AntigravityGreen else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -3695,6 +3744,170 @@ fun AccountSettingsPage(
                 }
             }
 
+            if (userEmail != null || accounts.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Text(
+                    text = stringResource(R.string.account_switcher_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.account_switcher_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                val otherAccounts = remember(accounts, userEmail) {
+                    accounts.filter { !it.email.equals(userEmail, ignoreCase = true) }
+                }
+
+                SettingsCard {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .animateContentSize()
+                    ) {
+                        if (otherAccounts.isNotEmpty()) {
+                            otherAccounts.forEachIndexed { idx, acc ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            viewModel.switchAccount(context, acc.id)
+                                            Toast.makeText(
+                                                context,
+                                                context.getString(R.string.account_switched_toast, acc.email),
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                        .padding(vertical = 8.dp, horizontal = 4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (!acc.picture.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = acc.picture,
+                                                contentDescription = acc.name,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Text(
+                                                text = acc.name.take(1).uppercase().ifBlank { "U" },
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 14.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = acc.name.ifBlank { acc.email },
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Medium,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = when (acc.tierType) {
+                                                    SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
+                                                    SubscriptionTierType.PRO -> AntigravityBlue.copy(alpha = 0.15f)
+                                                    SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)
+                                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                                }
+                                            ) {
+                                                Text(
+                                                    text = when (acc.tierType) {
+                                                        SubscriptionTierType.ULTRA -> stringResource(R.string.account_tier_ultra)
+                                                        SubscriptionTierType.PRO -> stringResource(R.string.account_tier_pro)
+                                                        SubscriptionTierType.ENTERPRISE -> stringResource(R.string.account_tier_enterprise)
+                                                        else -> stringResource(R.string.account_tier_free)
+                                                    },
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = when (acc.tierType) {
+                                                        SubscriptionTierType.ULTRA -> MaterialTheme.colorScheme.tertiary
+                                                        SubscriptionTierType.PRO -> AntigravityBlue
+                                                        SubscriptionTierType.ENTERPRISE -> MaterialTheme.colorScheme.secondary
+                                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                    },
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = acc.email,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            viewModel.removeAccount(context, acc.id)
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = stringResource(R.string.account_remove_button),
+                                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+
+                                if (idx < otherAccounts.size - 1) {
+                                    HorizontalDivider(
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f),
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Button(
+                            onClick = { viewModel.startGoogleSignIn(context) },
+                            colors = ButtonDefaults.buttonColors(containerColor = AntigravityBlue),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.account_add_button),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
             val gitHubUser by viewModel.gitHubUser.collectAsStateWithLifecycle()
@@ -3794,6 +4007,10 @@ fun AccountSettingsPage(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(stringResource(R.string.github_btn_connect), color = Color.White)
+                        }
+                    }
+                }
+            }
                         }
                     }
                 }

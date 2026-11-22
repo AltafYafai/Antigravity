@@ -86,6 +86,16 @@ data class RunningTask(
     val startTime: Long = System.currentTimeMillis()
 )
 
+data class RunningSubagent(
+    val id: String = UUID.randomUUID().toString(),
+    val conversationId: String? = null,
+    val typeName: String = "",
+    val role: String = "",
+    val prompt: String = "",
+    val isRunning: Boolean = true,
+    val startTime: Long = System.currentTimeMillis()
+)
+
 data class ChangedFileDetail(
     val name: String,
     val relativePath: String,

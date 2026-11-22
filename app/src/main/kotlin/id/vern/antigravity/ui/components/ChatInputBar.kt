@@ -106,6 +106,7 @@ import id.vern.antigravity.R
 import id.vern.antigravity.data.AttachedFile
 import id.vern.antigravity.data.QueuedMessage
 import id.vern.antigravity.data.RunningTask
+import id.vern.antigravity.data.RunningSubagent
 import id.vern.antigravity.data.SlashAction
 import id.vern.antigravity.ui.theme.AntigravityBlue
 import id.vern.antigravity.ui.theme.AntigravityRed
@@ -185,6 +186,7 @@ fun ChatInputBar(
     attachedFiles: List<AttachedFile>,
     queuedMessages: List<QueuedMessage> = emptyList(),
     runningTasks: List<RunningTask> = emptyList(),
+    runningSubagents: List<RunningSubagent> = emptyList(),
     onSendMessage: (String) -> Unit,
     onModelSelectorClick: () -> Unit,
     onAttachFileClick: () -> Unit,
@@ -196,6 +198,8 @@ fun ChatInputBar(
     onRemoveQueuedMessage: (String) -> Unit = {},
     onStopTask: (String) -> Unit = {},
     onTaskClick: (RunningTask) -> Unit = {},
+    onSubagentClick: (RunningSubagent) -> Unit = {},
+    onStopSubagent: (String) -> Unit = {},
     onGetWorkspaceFiles: (String) -> List<String> = { emptyList() },
     slashActions: List<SlashAction> = emptyList(),
     onSlashMenuOpened: () -> Unit = {},
@@ -209,6 +213,7 @@ fun ChatInputBar(
     var inputText by remember { mutableStateOf("") }
     var isQueuedExpanded by remember { mutableStateOf(true) }
     var isTaskRunningExpanded by remember { mutableStateOf(true) }
+    var isSubagentRunningExpanded by remember { mutableStateOf(true) }
     var showSecurityMenu by remember { mutableStateOf(false) }
 
     val currentPresetDisplayLabel = when {
@@ -537,6 +542,95 @@ fun ChatInputBar(
                                             contentDescription = stringResource(R.string.chat_queued_btn_delete),
                                             tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
                                             modifier = Modifier.size(15.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        AnimatedVisibility(visible = runningSubagents.isNotEmpty()) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), RoundedCornerShape(16.dp)),
+                tonalElevation = 2.dp
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    val subagentCount = runningSubagents.size
+                    val headerText = if (subagentCount == 1) {
+                        stringResource(R.string.chat_subagent_running, 1)
+                    } else {
+                        stringResource(R.string.chat_subagents_running, subagentCount)
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { isSubagentRunningExpanded = !isSubagentRunningExpanded }
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = headerText,
+                            style = MaterialTheme.typography.titleSmall.copy(fontSize = 12.5.sp, fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.weight(1f))
+                        Icon(
+                            imageVector = if (isSubagentRunningExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = stringResource(R.string.chat_expand_collapse),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    if (isSubagentRunningExpanded) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 10.dp),
+                            thickness = 0.6.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                        )
+                        Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                            runningSubagents.forEach { subagent ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onSubagentClick(subagent) }
+                                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(13.dp),
+                                        strokeWidth = 2.dp,
+                                        color = AntigravityBlue
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = subagent.role.ifEmpty { subagent.typeName.ifEmpty { stringResource(R.string.subagent_default_title) } },
+                                        fontSize = 11.5.sp,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    IconButton(
+                                        onClick = { onStopSubagent(subagent.id) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Stop,
+                                            contentDescription = stringResource(R.string.chat_subagent_stop),
+                                            tint = AntigravityRed,
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     }
                                 }

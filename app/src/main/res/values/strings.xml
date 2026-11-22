@@ -270,6 +270,17 @@
     <string name="chat_task_running">%d task running</string>
     <string name="chat_tasks_running">%d tasks running</string>
     <string name="chat_task_stop">Stop task</string>
+    <string name="chat_subagent_running">%d subagent running</string>
+    <string name="chat_subagents_running">%d subagents running</string>
+    <string name="chat_subagent_stop">Stop subagent</string>
+    <string name="subagent_chat_title">Subagent Chat</string>
+    <string name="subagent_chat_running">Running</string>
+    <string name="subagent_chat_completed">Completed</string>
+    <string name="subagent_chat_open_full">Open in full screen</string>
+    <string name="subagent_chat_no_messages">Subagent is initializing…</string>
+    <string name="subagent_chat_input_placeholder">Message subagent…</string>
+    <string name="subagent_chat_stop">Stop</string>
+    <string name="subagent_default_title">Subagent</string>
     <string name="chat_expand_collapse">Toggle expand</string>
     <string name="chat_auth_required_error">Error: Google authentication required. Please sign in via the Google account dialog to start interacting with the AI agent.</string>
     <string name="chat_task_completed">Task completed</string>
@@ -640,5 +651,23 @@
     <string name="ota_downloading_wait_msg">Please wait while the update is being downloaded…</string>
     <string name="logs_prefix">Logs:\n</string>
     <string name="ota_check_up_to_date">App is up to date</string>
+    <string name="account_switcher_title">Google Accounts</string>
+    <string name="account_switcher_subtitle">Switch between connected accounts and tiers</string>
+    <string name="account_active_badge">Active</string>
+    <string name="account_switch_action">Switch to this account</string>
+    <string name="account_add_button">Add Google Account</string>
+    <string name="account_remove_button">Remove</string>
+    <string name="account_remove_confirm_title">Remove Account</string>
+    <string name="account_remove_confirm_message">Are you sure you want to remove %1$s from saved accounts?</string>
+    <string name="account_switched_toast">Switched account to %1$s</string>
+    <string name="account_tier_label">Tier: %1$s</string>
+    <string name="account_tier_free">Free</string>
+    <string name="account_tier_pro">Pro</string>
+    <string name="account_tier_ultra">Ultra</string>
+    <string name="account_tier_enterprise">Enterprise</string>
+    <string name="model_status_requires_pro">Requires Pro tier</string>
+    <string name="model_toast_requires_pro">%1$s requires a Google AI Pro subscription</string>
+    <string name="model_toast_requires_ultra">%1$s requires a Google AI Ultra subscription</string>
+    <string name="workspace_label">Workspace: %1$s</string>
 </resources>
 

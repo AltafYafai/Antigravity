@@ -3,6 +3,7 @@ package id.vern.antigravity.ui.components
 import android.content.Context
 import android.os.Environment
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -12,6 +13,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -135,19 +138,11 @@ fun AgentDetailsBottomSheet(
 ) {
     var selectedTab by remember { mutableIntStateOf(initialTab) }
     var activeEditorTab by remember { mutableStateOf<OpenTab?>(null) }
-    val sheetState = rememberModalBottomSheetState(
-        skipPartiallyExpanded = true,
-        confirmValueChange = { targetValue ->
-            if (selectedTab == 3 && activeEditorTab != null && targetValue == SheetValue.Hidden) {
-                false
-            } else {
-                true
-            }
-        }
-    )
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val workspacePath by viewModel.workspacePath.collectAsStateWithLifecycle()
     val projectList by viewModel.projectList.collectAsStateWithLifecycle()
     val runningTasks by viewModel.runningTasks.collectAsStateWithLifecycle()
+    val runningSubagents by viewModel.runningSubagents.collectAsStateWithLifecycle()
     val daemonTasks by viewModel.daemonTasks.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -204,6 +199,7 @@ fun AgentDetailsBottomSheet(
     val loadingDiffs = remember { mutableStateMapOf<String, Boolean>() }
 
     var showTerminalSessionsMenu by remember { mutableStateOf(false) }
+    var showTerminalMoreMenu by remember { mutableStateOf(false) }
     var showWorkspacePickerMenu by remember { mutableStateOf(false) }
 
     val chatMessages by viewModel.chatMessages.collectAsStateWithLifecycle()
@@ -273,12 +269,31 @@ fun AgentDetailsBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         sheetState = sheetState,
-        dragHandle = { BottomSheetDefaults.DragHandle() },
+        dragHandle = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(36.dp)
+                        .height(4.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
+                )
+            }
+        },
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
         modifier = modifier.fillMaxWidth()
     ) {
+        BackHandler(enabled = activeEditorTab != null) {
+            activeEditorTab = null
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -340,19 +355,6 @@ fun AgentDetailsBottomSheet(
                         }
                     }
                 }
-
-                if (selectedTab == 2) {
-                    IconButton(
-                        onClick = { TerminalSessionManager.newSession() },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = stringResource(R.string.terminal_new_session),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -377,13 +379,13 @@ fun AgentDetailsBottomSheet(
                         item {
                             AccordionHeader(
                                 title = stringResource(R.string.agent_details_subagents),
-                                count = runningTasks.size,
+                                count = runningSubagents.size,
                                 isExpanded = expandedSubagents,
                                 onToggle = { expandedSubagents = !expandedSubagents }
                             )
                         }
                         if (expandedSubagents) {
-                            if (runningTasks.isEmpty()) {
+                            if (runningSubagents.isEmpty()) {
                                 item {
                                     Text(
                                         text = stringResource(R.string.agent_details_no_subagents),
@@ -393,6 +395,61 @@ fun AgentDetailsBottomSheet(
                                     )
                                 }
                             } else {
+                                items(runningSubagents) { sub ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                viewModel.openSubagentAsActiveConversation(context, sub)
+                                            }
+                                            .padding(horizontal = 20.dp, vertical = 8.dp)
+                                    ) {
+                                        if (sub.isRunning) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(13.dp),
+                                                strokeWidth = 2.dp,
+                                                color = AntigravityBlue
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.SmartToy,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                                tint = AntigravityBlue
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = sub.role.ifEmpty { sub.typeName.ifEmpty { stringResource(R.string.subagent_default_title) } },
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = if (sub.isRunning) stringResource(R.string.subagent_chat_running) else stringResource(R.string.subagent_chat_completed),
+                                                fontSize = 10.5.sp,
+                                                color = if (sub.isRunning) AntigravityBlue else AntigravityGreen
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (runningTasks.isNotEmpty()) {
+                            item {
+                                AccordionHeader(
+                                    title = stringResource(R.string.chat_tasks_running, runningTasks.size),
+                                    count = runningTasks.size,
+                                    isExpanded = expandedTasks,
+                                    onToggle = { expandedTasks = !expandedTasks }
+                                )
+                            }
+                            if (expandedTasks) {
                                 items(runningTasks) { task ->
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
@@ -1128,7 +1185,8 @@ fun AgentDetailsBottomSheet(
 
                 2 -> {
 
-                    val projName = workspacePath?.let { File(it).name } ?: "Project"
+                    val projName = workspacePath?.let { File(it).name }.orEmpty()
+                    val currentSession = TerminalSessionManager.currentSessionName.value
                     Column(modifier = Modifier.fillMaxSize()) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -1139,7 +1197,7 @@ fun AgentDetailsBottomSheet(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
-                                    text = "Terminals",
+                                    text = stringResource(R.string.agent_tab_terminals),
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
@@ -1150,17 +1208,26 @@ fun AgentDetailsBottomSheet(
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
                                         color = MaterialTheme.colorScheme.surfaceVariant,
-                                        modifier = Modifier.clickable { showWorkspacePickerMenu = true }
+                                        modifier = Modifier.clickable { showTerminalSessionsMenu = true }
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                                         ) {
+                                            val isAgy = currentSession == TerminalSessionManager.AGY_SESSION_NAME
+                                            Icon(
+                                                imageVector = if (isAgy) Icons.Default.SmartToy else Icons.Default.Terminal,
+                                                contentDescription = null,
+                                                tint = if (isAgy) Color(0xFF38BDF8) else AntigravityGreen,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
                                             Text(
-                                                text = projName,
+                                                text = currentSession,
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Medium,
-                                                color = MaterialTheme.colorScheme.onSurface
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1
                                             )
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Icon(
@@ -1170,61 +1237,6 @@ fun AgentDetailsBottomSheet(
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                    }
-                                    DropdownMenu(
-                                        expanded = showWorkspacePickerMenu,
-                                        onDismissRequest = { showWorkspacePickerMenu = false },
-                                        shape = RoundedCornerShape(16.dp),
-                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
-                                    ) {
-                                        if (projectList.isEmpty()) {
-                                            DropdownMenuItem(
-                                                text = { Text(stringResource(R.string.workspaces_empty_configured), fontSize = 12.sp) },
-                                                onClick = { showWorkspacePickerMenu = false }
-                                            )
-                                        } else {
-                                            projectList.forEach { p ->
-                                                DropdownMenuItem(
-                                                    text = { Text(p.name, fontSize = 13.sp, fontWeight = if (p.absolutePath == workspacePath) FontWeight.Bold else FontWeight.Normal) },
-                                                    leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                                                    onClick = {
-                                                        viewModel.setWorkspacePath(context, p.absolutePath)
-                                                        showWorkspacePickerMenu = false
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                IconButton(
-                                    onClick = { TerminalSessionManager.newSession() },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = stringResource(R.string.terminal_btn_new),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-
-                                Box {
-                                    IconButton(
-                                        onClick = { showTerminalSessionsMenu = true },
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Menu,
-                                            contentDescription = stringResource(R.string.terminal_sessions_title),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(18.dp)
-                                        )
                                     }
                                     DropdownMenu(
                                         expanded = showTerminalSessionsMenu,
@@ -1258,13 +1270,50 @@ fun AgentDetailsBottomSheet(
                                                 }
                                             )
                                         }
-                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f))
+                                    }
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                IconButton(
+                                    onClick = { TerminalSessionManager.newSession() },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = stringResource(R.string.terminal_btn_new),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                Box {
+                                    IconButton(
+                                        onClick = { showTerminalMoreMenu = true },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Menu,
+                                            contentDescription = stringResource(R.string.terminal_sessions_title),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = showTerminalMoreMenu,
+                                        onDismissRequest = { showTerminalMoreMenu = false },
+                                        shape = RoundedCornerShape(16.dp),
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                                    ) {
                                         DropdownMenuItem(
                                             text = { Text(stringResource(R.string.terminal_clear_buffer), fontSize = 13.sp) },
                                             leadingIcon = { Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(16.dp)) },
                                             onClick = {
                                                 TerminalSessionManager.clear()
-                                                showTerminalSessionsMenu = false
+                                                showTerminalMoreMenu = false
                                             }
                                         )
                                         DropdownMenuItem(
@@ -1272,7 +1321,7 @@ fun AgentDetailsBottomSheet(
                                             leadingIcon = { Icon(Icons.Default.Stop, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)) },
                                             onClick = {
                                                 TerminalSessionManager.killCurrentProcess()
-                                                showTerminalSessionsMenu = false
+                                                showTerminalMoreMenu = false
                                             }
                                         )
                                         DropdownMenuItem(
@@ -1280,9 +1329,47 @@ fun AgentDetailsBottomSheet(
                                             leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp)) },
                                             onClick = {
                                                 TerminalSessionManager.restartShell()
-                                                showTerminalSessionsMenu = false
+                                                showTerminalMoreMenu = false
                                             }
                                         )
+                                        if (projName.isNotBlank()) {
+                                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f))
+                                            DropdownMenuItem(
+                                                text = { Text(stringResource(R.string.workspace_label, projName), fontSize = 13.sp) },
+                                                leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                                onClick = {
+                                                    showWorkspacePickerMenu = true
+                                                    showTerminalMoreMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+
+                                    if (showWorkspacePickerMenu) {
+                                        DropdownMenu(
+                                            expanded = showWorkspacePickerMenu,
+                                            onDismissRequest = { showWorkspacePickerMenu = false },
+                                            shape = RoundedCornerShape(16.dp),
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                                        ) {
+                                            if (projectList.isEmpty()) {
+                                                DropdownMenuItem(
+                                                    text = { Text(stringResource(R.string.workspaces_empty_configured), fontSize = 12.sp) },
+                                                    onClick = { showWorkspacePickerMenu = false }
+                                                )
+                                            } else {
+                                                projectList.forEach { p ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(p.name, fontSize = 13.sp, fontWeight = if (p.absolutePath == workspacePath) FontWeight.Bold else FontWeight.Normal) },
+                                                        leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                                        onClick = {
+                                                            viewModel.setWorkspacePath(context, p.absolutePath)
+                                                            showWorkspacePickerMenu = false
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

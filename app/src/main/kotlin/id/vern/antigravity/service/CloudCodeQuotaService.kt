@@ -303,13 +303,8 @@ object CloudCodeQuotaService {
         val fallbackToken = candidateTokenFromFiles.ifBlank { "caa720fa-9dc7-4b27-ad5e-f1af56c2e5eb" }
         val candidatePorts = listOf(38171, 36745, 37115, 33953, 45157, 45158, 45159, 45160, 45939, 43189)
         for (port in candidatePorts) {
-            val liveToken = fetchCsrfTokenFromPort(port, context)
-            val tokenToUse = if (!liveToken.isNullOrBlank()) liveToken else fallbackToken
-            list.add(EndpointCandidate(port, tokenToUse, "http"))
-            list.add(EndpointCandidate(port, tokenToUse, "https"))
-            if (!liveToken.isNullOrBlank()) {
-                persistEndpoint(port, liveToken, context)
-            }
+            list.add(EndpointCandidate(port, fallbackToken, "http"))
+            list.add(EndpointCandidate(port, fallbackToken, "https"))
         }
 
         return list.distinct()
@@ -696,8 +691,8 @@ object CloudCodeQuotaService {
                 if (googleShared.isNotEmpty() && (gemini5hRem != null || geminiWeeklyRem != null)) {
                     val fiveHourFraction = gemini5hRem ?: 1.0
                     val fiveHourReset = gemini5hReset
-                    val weeklyFraction = geminiWeeklyRem ?: thirdPartyWeeklyRem ?: 1.0
-                    val weeklyReset = geminiWeeklyReset ?: thirdPartyWeeklyReset
+                    val weeklyFraction = geminiWeeklyRem ?: 1.0
+                    val weeklyReset = geminiWeeklyReset
 
                     val buckets = mutableListOf<QuotaBucket>()
                     buckets.add(
@@ -843,38 +838,41 @@ object CloudCodeQuotaService {
         val sc = cachedSslContext
         val allHostsValid = HostnameVerifier { _, _ -> true }
         val schemes = if (preferredScheme == "http") listOf("http", "https") else listOf("https", "http")
+        val hosts = listOf("127.0.0.1", "localhost")
 
-        for (scheme in schemes) {
-            try {
-                val url = URL("$scheme://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/$rpcPath")
-                val conn = url.openConnection() as HttpURLConnection
-                if (conn is HttpsURLConnection && sc != null) {
-                    conn.sslSocketFactory = sc.socketFactory
-                    conn.hostnameVerifier = allHostsValid
-                }
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.connectTimeout = 3000
-                conn.readTimeout = 3000
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("Connect-Protocol-Version", "1")
-                conn.setRequestProperty("x-antigravity-csrf-token", csrf)
-                conn.setRequestProperty("x-codeium-csrf-token", csrf)
-
-                OutputStreamWriter(conn.outputStream).use { it.write(requestBody); it.flush() }
-
-                val code = conn.responseCode
-                if (code in 200..299) {
-                    val body = conn.inputStream.bufferedReader().use { it.readText() }
-                    if (body.isNotBlank() && (body.contains("\"groups\"") || body.contains("\"models\"") || body.contains("\"response\""))) {
-                        Log.i(TAG, "Direct connection succeeded for local server $scheme://127.0.0.1:$port ($rpcPath)")
-                        return body
+        for (host in hosts) {
+            for (scheme in schemes) {
+                try {
+                    val url = URL("$scheme://$host:$port/exa.language_server_pb.LanguageServerService/$rpcPath")
+                    val conn = url.openConnection() as HttpURLConnection
+                    if (conn is HttpsURLConnection && sc != null) {
+                        conn.sslSocketFactory = sc.socketFactory
+                        conn.hostnameVerifier = allHostsValid
                     }
-                } else {
-                    Log.w(TAG, "Direct local server $scheme://127.0.0.1:$port ($rpcPath) HTTP response: $code")
+                    conn.requestMethod = "POST"
+                    conn.doOutput = true
+                    conn.connectTimeout = 2000
+                    conn.readTimeout = 2000
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.setRequestProperty("Connect-Protocol-Version", "1")
+                    conn.setRequestProperty("x-antigravity-csrf-token", csrf)
+                    conn.setRequestProperty("x-codeium-csrf-token", csrf)
+
+                    OutputStreamWriter(conn.outputStream).use { it.write(requestBody); it.flush() }
+
+                    val code = conn.responseCode
+                    if (code in 200..299) {
+                        val body = conn.inputStream.bufferedReader().use { it.readText() }
+                        if (body.isNotBlank() && (body.contains("\"groups\"") || body.contains("\"models\"") || body.contains("\"response\""))) {
+                            Log.i(TAG, "Direct connection succeeded for local server $scheme://$host:$port ($rpcPath)")
+                            return body
+                        }
+                    } else {
+                        Log.w(TAG, "Direct local server $scheme://$host:$port ($rpcPath) HTTP response: $code")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Direct local server $scheme://$host:$port ($rpcPath) failed: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Direct local server $scheme://127.0.0.1:$port ($rpcPath) failed: ${e.message}")
             }
         }
         return null

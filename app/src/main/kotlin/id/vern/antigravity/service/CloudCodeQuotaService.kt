@@ -64,14 +64,35 @@ object CloudCodeQuotaService {
         }
     }
 
+    data class EndpointCandidate(
+        val port: Int,
+        val csrf: String,
+        val preferredScheme: String = "http"
+    )
+
     private fun persistEndpoint(port: Int, csrf: String, context: Context? = null) {
         try {
             val json = JSONObject().apply {
                 put("port", port)
+                put("https_port", 43189)
                 put("csrf_token", csrf)
-            }.toString()
+            }.toString(2)
 
             val files = mutableListOf<File>()
+            try {
+                val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (dlDir != null) {
+                    files.add(File(dlDir, "Andronix/.antigravity_endpoint"))
+                    files.add(File(dlDir, ".antigravity_endpoint"))
+                }
+            } catch (e: Exception) {}
+
+            files.add(File("/storage/emulated/0/Download/Andronix/.antigravity_endpoint"))
+            files.add(File("/storage/emulated/0/Download/.antigravity_endpoint"))
+            files.add(File("/sdcard/Download/Andronix/.antigravity_endpoint"))
+            files.add(File("/sdcard/Download/.antigravity_endpoint"))
+            files.add(File("/sdcard/.antigravity_endpoint"))
+
             if (context != null) {
                 files.add(File(context.filesDir, ".antigravity_endpoint"))
                 files.add(File(context.filesDir, ".gemini/.antigravity_endpoint"))
@@ -157,10 +178,25 @@ object CloudCodeQuotaService {
         return null
     }
 
-    private fun getCandidateEndpoints(context: Context? = null): List<Pair<Int, String>> {
-        val list = mutableListOf<Pair<Int, String>>()
+    private fun getCandidateEndpoints(context: Context? = null): List<EndpointCandidate> {
+        val list = mutableListOf<EndpointCandidate>()
 
         val candidateFiles = mutableListOf<File>()
+        try {
+            val dlDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (dlDir != null) {
+                candidateFiles.add(File(dlDir, "Andronix/.antigravity_endpoint"))
+                candidateFiles.add(File(dlDir, ".antigravity_endpoint"))
+            }
+        } catch (e: Exception) {}
+
+        candidateFiles.add(File("/storage/emulated/0/Download/Andronix/.antigravity_endpoint"))
+        candidateFiles.add(File("/storage/emulated/0/Download/.antigravity_endpoint"))
+        candidateFiles.add(File("/sdcard/Download/Andronix/.antigravity_endpoint"))
+        candidateFiles.add(File("/sdcard/Download/.antigravity_endpoint"))
+        candidateFiles.add(File("/sdcard/.antigravity_endpoint"))
+        candidateFiles.add(File("/data/local/tmp/.antigravity_endpoint"))
+
         if (context != null) {
             candidateFiles.add(File(context.filesDir, ".antigravity_endpoint"))
             candidateFiles.add(File(context.filesDir, ".gemini/.antigravity_endpoint"))
@@ -171,10 +207,21 @@ object CloudCodeQuotaService {
                 if (f.isFile && f.canRead()) {
                     val content = f.readText(Charsets.UTF_8).trim()
                     val obj = JSONObject(content)
-                    val port = obj.optInt("port", 45157)
-                    val csrf = obj.optString("csrf_token", "")
+                    val httpPort = obj.optInt("port", 0)
+                    val httpsPort = obj.optInt("https_port", 0)
+                    val csrf = obj.optString("csrf_token", "").ifBlank {
+                        obj.optString("csrfToken", "")
+                    }
                     if (csrf.isNotBlank()) {
-                        list.add(Pair(port, csrf))
+                        if (httpPort > 0) {
+                            list.add(EndpointCandidate(httpPort, csrf, "http"))
+                        }
+                        if (httpsPort > 0) {
+                            list.add(EndpointCandidate(httpsPort, csrf, "https"))
+                        }
+                        if (httpPort <= 0 && httpsPort <= 0) {
+                            list.add(EndpointCandidate(45939, csrf, "http"))
+                        }
                     }
                 }
             } catch (e: Exception) {}
@@ -184,11 +231,12 @@ object CloudCodeQuotaService {
             return list.distinct()
         }
 
-        val candidatePorts = listOf(45157, 45158, 45159, 45160)
+        val candidatePorts = listOf(45939, 43189, 45157, 45158, 45159, 45160)
         for (port in candidatePorts) {
             val liveToken = fetchCsrfTokenFromPort(port, context)
             if (!liveToken.isNullOrBlank()) {
-                list.add(Pair(port, liveToken))
+                list.add(EndpointCandidate(port, liveToken, "http"))
+                list.add(EndpointCandidate(port, liveToken, "https"))
                 persistEndpoint(port, liveToken, context)
                 break
             }
@@ -246,33 +294,34 @@ object CloudCodeQuotaService {
         }
     }
 
-    private fun queryLocalEndpointViaCurl(port: Int, csrf: String, rpcPath: String = "RetrieveUserQuotaSummary", requestBody: String = "{}", context: Context? = null): String? {
-        return try {
-            val curlBin = findCurlBinary(context)
-            val process = ProcessBuilder(
-                curlBin,
-                "-k", "-s",
-                "--max-time", "5",
-                "-X", "POST",
-                "-H", "Content-Type: application/json",
-                "-H", "x-codeium-csrf-token: $csrf",
-                "-H", "Connect-Protocol-Version: 1",
-                "-d", requestBody,
-                "https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/$rpcPath"
-            ).redirectErrorStream(true).start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            val exitCode = process.waitFor()
-            if (exitCode == 0 && output.isNotBlank() && (output.contains("\"groups\"") || output.contains("\"models\""))) {
-                Log.i(TAG, "curl query succeeded for local server port $port ($rpcPath)")
-                output
-            } else {
-                Log.w(TAG, "curl query failed (exit $exitCode, path $rpcPath): $output")
-                null
+    private fun queryLocalEndpointViaCurl(port: Int, csrf: String, rpcPath: String = "RetrieveUserQuotaSummary", requestBody: String = "{\"force_refresh\": true}", context: Context? = null): String? {
+        val curlBin = findCurlBinary(context)
+        val schemes = listOf("http", "https")
+        for (scheme in schemes) {
+            try {
+                val process = ProcessBuilder(
+                    curlBin,
+                    "-k", "-s",
+                    "--max-time", "4",
+                    "-X", "POST",
+                    "-H", "Content-Type: application/json",
+                    "-H", "Connect-Protocol-Version: 1",
+                    "-H", "x-antigravity-csrf-token: $csrf",
+                    "-H", "x-codeium-csrf-token: $csrf",
+                    "-d", requestBody,
+                    "$scheme://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/$rpcPath"
+                ).redirectErrorStream(true).start()
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                val exitCode = process.waitFor()
+                if (exitCode == 0 && output.isNotBlank() && (output.contains("\"groups\"") || output.contains("\"models\"") || output.contains("\"response\""))) {
+                    Log.i(TAG, "curl query succeeded for local server $scheme://127.0.0.1:$port ($rpcPath)")
+                    return output
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "curl query execution error: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "curl query execution error: ${e.message}")
-            null
         }
+        return null
     }
 
     private fun orderedModelIds(mResp: JSONObject, modelsMap: JSONObject?): List<String> {
@@ -518,7 +567,7 @@ object CloudCodeQuotaService {
                 if (googleShared.isNotEmpty()) {
                     val fiveHourFraction = gemini5hRem ?: 1.0
                     val fiveHourReset = gemini5hReset
-                    val weeklyFraction = geminiWeeklyRem ?: fiveHourFraction
+                    val weeklyFraction = geminiWeeklyRem ?: 1.0
                     val weeklyReset = geminiWeeklyReset
 
                     val buckets = mutableListOf<QuotaBucket>()
@@ -602,72 +651,99 @@ object CloudCodeQuotaService {
 
     private suspend fun fetchFromLocalLanguageServer(context: Context? = null, tier: CodeAssistTier? = null): UserQuotaSummary? {
         val candidates = getCandidateEndpoints(context)
-        for ((port, csrf) in candidates) {
+        val sc = cachedSslContext
+        val allHostsValid = HostnameVerifier { _, _ -> true }
+
+        for (endpoint in candidates) {
+            val port = endpoint.port
+            val csrf = endpoint.csrf
+            val schemes = if (endpoint.preferredScheme == "https") listOf("https", "http") else listOf("http", "https")
+
             var respStr: String? = null
-            var modelsRespStr: String? = null
+            var workingScheme = endpoint.preferredScheme
 
-            val sc = cachedSslContext
-            val allHostsValid = HostnameVerifier { hostname, session -> true }
-
-            try {
-                if (sc != null) {
-                    val url = URL("https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary")
-                    val conn = url.openConnection() as HttpsURLConnection
-                    conn.sslSocketFactory = sc.socketFactory
-                    conn.hostnameVerifier = allHostsValid
+            for (scheme in schemes) {
+                try {
+                    val url = URL("$scheme://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary")
+                    val conn = url.openConnection() as HttpURLConnection
+                    if (conn is HttpsURLConnection && sc != null) {
+                        conn.sslSocketFactory = sc.socketFactory
+                        conn.hostnameVerifier = allHostsValid
+                    }
                     conn.requestMethod = "POST"
                     conn.doOutput = true
-                    conn.connectTimeout = 4000
-                    conn.readTimeout = 4000
+                    conn.connectTimeout = 3000
+                    conn.readTimeout = 3000
                     conn.setRequestProperty("Content-Type", "application/json")
-                    conn.setRequestProperty("x-codeium-csrf-token", csrf)
                     conn.setRequestProperty("Connect-Protocol-Version", "1")
+                    conn.setRequestProperty("x-antigravity-csrf-token", csrf)
+                    conn.setRequestProperty("x-codeium-csrf-token", csrf)
 
-                    OutputStreamWriter(conn.outputStream).use { it.write("{}"); it.flush() }
+                    OutputStreamWriter(conn.outputStream).use {
+                        it.write("{\"force_refresh\": true}")
+                        it.flush()
+                    }
 
                     val code = conn.responseCode
                     if (code in 200..299) {
-                        respStr = conn.inputStream.bufferedReader().use { it.readText() }
+                        val body = conn.inputStream.bufferedReader().use { it.readText() }
+                        if (body.contains("\"groups\"") || body.contains("\"response\"")) {
+                            respStr = body
+                            workingScheme = scheme
+                            break
+                        }
                     } else {
-                        Log.w(TAG, "Local server candidate $port HTTP response: $code")
+                        Log.w(TAG, "Local server candidate $scheme://127.0.0.1:$port HTTP response: $code")
                     }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Local server candidate $scheme://127.0.0.1:$port failed: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Local server candidate $port HttpsURLConnection failed: ${e.message}")
             }
 
-            if (respStr.isNullOrBlank() || !respStr.contains("\"groups\"")) {
-                respStr = queryLocalEndpointViaCurl(port, csrf, "RetrieveUserQuotaSummary", "{}", context)
+            if (respStr.isNullOrBlank() || (!respStr.contains("\"groups\"") && !respStr.contains("\"response\""))) {
+                respStr = queryLocalEndpointViaCurl(port, csrf, "RetrieveUserQuotaSummary", "{\"force_refresh\": true}", context)
             }
 
-            if (!respStr.isNullOrBlank() && respStr.contains("\"groups\"")) {
-                try {
-                    if (sc != null) {
-                        val urlM = URL("https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/GetAvailableModels")
-                        val connM = urlM.openConnection() as HttpsURLConnection
-                        connM.sslSocketFactory = sc.socketFactory
-                        connM.hostnameVerifier = allHostsValid
+            if (!respStr.isNullOrBlank() && (respStr.contains("\"groups\"") || respStr.contains("\"response\""))) {
+                var modelsRespStr: String? = null
+                val modelSchemes = listOf(workingScheme, if (workingScheme == "http") "https" else "http")
+                for (scheme in modelSchemes) {
+                    try {
+                        val urlM = URL("$scheme://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/GetAvailableModels")
+                        val connM = urlM.openConnection() as HttpURLConnection
+                        if (connM is HttpsURLConnection && sc != null) {
+                            connM.sslSocketFactory = sc.socketFactory
+                            connM.hostnameVerifier = allHostsValid
+                        }
                         connM.requestMethod = "POST"
                         connM.doOutput = true
-                        connM.connectTimeout = 4000
-                        connM.readTimeout = 4000
+                        connM.connectTimeout = 3000
+                        connM.readTimeout = 3000
                         connM.setRequestProperty("Content-Type", "application/json")
-                        connM.setRequestProperty("x-codeium-csrf-token", csrf)
                         connM.setRequestProperty("Connect-Protocol-Version", "1")
+                        connM.setRequestProperty("x-antigravity-csrf-token", csrf)
+                        connM.setRequestProperty("x-codeium-csrf-token", csrf)
 
-                        OutputStreamWriter(connM.outputStream).use { it.write("{\"forceRefresh\": true}"); it.flush() }
+                        OutputStreamWriter(connM.outputStream).use {
+                            it.write("{\"force_refresh\": true}")
+                            it.flush()
+                        }
 
                         val codeM = connM.responseCode
                         if (codeM in 200..299) {
-                            modelsRespStr = connM.inputStream.bufferedReader().use { it.readText() }
+                            val bodyM = connM.inputStream.bufferedReader().use { it.readText() }
+                            if (bodyM.contains("\"models\"") || bodyM.contains("\"response\"")) {
+                                modelsRespStr = bodyM
+                                break
+                            }
                         }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Local server candidate $scheme://127.0.0.1:$port GetAvailableModels failed: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Local server candidate $port GetAvailableModels failed: ${e.message}")
                 }
 
                 if (modelsRespStr.isNullOrBlank()) {
-                    modelsRespStr = queryLocalEndpointViaCurl(port, csrf, "GetAvailableModels", "{\"forceRefresh\": true}", context)
+                    modelsRespStr = queryLocalEndpointViaCurl(port, csrf, "GetAvailableModels", "{\"force_refresh\": true}", context)
                 }
 
                 var modelsFetchFailed = false
@@ -726,25 +802,32 @@ object CloudCodeQuotaService {
 
     fun restartLocalLanguageServer(context: Context? = null) {
         val candidates = getCandidateEndpoints(context)
-        for ((port, csrf) in candidates) {
-            try {
-                val sc = cachedSslContext ?: continue
-                val url = URL("https://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/Restart")
-                val conn = url.openConnection() as HttpsURLConnection
-                conn.sslSocketFactory = sc.socketFactory
-                conn.hostnameVerifier = HostnameVerifier { hostname, session -> true }
-                conn.requestMethod = "POST"
-                conn.doOutput = true
-                conn.connectTimeout = 3000
-                conn.readTimeout = 3000
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.setRequestProperty("x-codeium-csrf-token", csrf)
-                conn.setRequestProperty("Connect-Protocol-Version", "1")
-                OutputStreamWriter(conn.outputStream).use { it.write("{}"); it.flush() }
-                val code = conn.responseCode
-                Log.i(TAG, "Notified LanguageServer on port $port to restart (HTTP $code)")
-            } catch (e: Exception) {
-
+        for (endpoint in candidates) {
+            val port = endpoint.port
+            val csrf = endpoint.csrf
+            val schemes = listOf("http", "https")
+            for (scheme in schemes) {
+                try {
+                    val sc = cachedSslContext
+                    val url = URL("$scheme://127.0.0.1:$port/exa.language_server_pb.LanguageServerService/Restart")
+                    val conn = url.openConnection() as HttpURLConnection
+                    if (conn is HttpsURLConnection && sc != null) {
+                        conn.sslSocketFactory = sc.socketFactory
+                        conn.hostnameVerifier = HostnameVerifier { _, _ -> true }
+                    }
+                    conn.requestMethod = "POST"
+                    conn.doOutput = true
+                    conn.connectTimeout = 3000
+                    conn.readTimeout = 3000
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.setRequestProperty("Connect-Protocol-Version", "1")
+                    conn.setRequestProperty("x-antigravity-csrf-token", csrf)
+                    conn.setRequestProperty("x-codeium-csrf-token", csrf)
+                    OutputStreamWriter(conn.outputStream).use { it.write("{}"); it.flush() }
+                    val code = conn.responseCode
+                    Log.i(TAG, "Notified LanguageServer on $scheme://127.0.0.1:$port to restart (HTTP $code)")
+                    if (code in 200..299) break
+                } catch (e: Exception) {}
             }
         }
     }

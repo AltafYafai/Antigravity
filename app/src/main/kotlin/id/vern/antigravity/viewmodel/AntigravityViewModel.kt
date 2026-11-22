@@ -43,8 +43,10 @@ import id.vern.antigravity.data.SlashCommandParser
 import id.vern.antigravity.data.SYSTEM_SLASH_COMMANDS
 import id.vern.antigravity.data.mergeDynamicSlashActions
 import id.vern.antigravity.oauth.DeviceCodeInfo
+import id.vern.antigravity.oauth.GitHubAccountManager
 import id.vern.antigravity.oauth.GitHubAuthManager
 import id.vern.antigravity.oauth.GitHubUser
+import id.vern.antigravity.oauth.StoredGitHubAccount
 import id.vern.antigravity.service.AgyModelsService
 import id.vern.antigravity.service.CliModel
 import id.vern.antigravity.service.CloudCodeQuotaService
@@ -476,6 +478,9 @@ class AntigravityViewModel : ViewModel() {
 
     private val mutableGitHubUser = MutableStateFlow<GitHubUser?>(null)
     val gitHubUser: StateFlow<GitHubUser?> = mutableGitHubUser.asStateFlow()
+
+    private val mutableGitHubAccounts = MutableStateFlow<List<StoredGitHubAccount>>(emptyList())
+    val gitHubAccounts: StateFlow<List<StoredGitHubAccount>> = mutableGitHubAccounts.asStateFlow()
 
     private val mutableShowGitHubSignInDialog = MutableStateFlow(false)
     val showGitHubSignInDialog: StateFlow<Boolean> = mutableShowGitHubSignInDialog.asStateFlow()
@@ -3335,8 +3340,41 @@ class AntigravityViewModel : ViewModel() {
 
     fun refreshGitHubAuth(context: Context) {
         viewModelScope.launch {
+            GitHubAccountManager.importExistingAccountIfEmpty(context)
+            val accounts = GitHubAccountManager.getAccounts(context)
+            mutableGitHubAccounts.value = accounts
             val user = GitHubAuthManager.getStoredUser(context)
             mutableGitHubUser.value = user
+        }
+    }
+
+    fun switchGitHubAccount(context: Context, username: String) {
+        viewModelScope.launch {
+            val success = GitHubAccountManager.switchAccount(context, username)
+            if (success) {
+                refreshGitHubAuth(context)
+                addLog("GitHub", "Switched active GitHub account to @$username")
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.github_account_switched_toast, username),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
+
+    fun removeGitHubAccount(context: Context, username: String) {
+        viewModelScope.launch {
+            val success = GitHubAccountManager.removeAccount(context, username)
+            if (success) {
+                refreshGitHubAuth(context)
+                addLog("GitHub", "Removed GitHub account @$username")
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.github_account_removed_toast, username),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
     }
 
@@ -3389,7 +3427,7 @@ class AntigravityViewModel : ViewModel() {
             if (pollResult.isSuccess) {
                 val user = pollResult.getOrThrow()
                 GitHubAuthManager.saveCredentials(context, user)
-                mutableGitHubUser.value = user
+                refreshGitHubAuth(context)
                 mutableShowGitHubSignInDialog.value = false
                 mutableGitHubDeviceCodeInfo.value = null
                 mutableGitHubAuthStatusText.value = null
@@ -3410,7 +3448,7 @@ class AntigravityViewModel : ViewModel() {
             if (result.isSuccess) {
                 val user = result.getOrThrow()
                 GitHubAuthManager.saveCredentials(context, user)
-                mutableGitHubUser.value = user
+                refreshGitHubAuth(context)
                 mutableShowGitHubSignInDialog.value = false
                 addLog("GitHub", "Successfully authenticated with GitHub token as @${user.username}")
                 Toast.makeText(context, context.getString(R.string.github_toast_connected, user.username), Toast.LENGTH_SHORT).show()
@@ -3425,8 +3463,13 @@ class AntigravityViewModel : ViewModel() {
     fun signOutGitHub(context: Context) {
         activeDevicePollJob?.cancel()
         activeDevicePollJob = null
-        GitHubAuthManager.logout(context)
-        mutableGitHubUser.value = null
+        val activeUser = mutableGitHubUser.value
+        if (activeUser != null) {
+            GitHubAccountManager.removeAccount(context, activeUser.username)
+        } else {
+            GitHubAuthManager.logout(context)
+        }
+        refreshGitHubAuth(context)
         mutableGitHubDeviceCodeInfo.value = null
         addLog("GitHub", "Signed out of GitHub")
         Toast.makeText(context, context.getString(R.string.github_toast_disconnected), Toast.LENGTH_SHORT).show()

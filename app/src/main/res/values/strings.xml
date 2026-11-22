@@ -702,5 +702,14 @@
     <string name="ota_permission_dialog_title">Permission Required</string>
     <string name="ota_permission_dialog_msg">To install updates directly, Antigravity requires the \"Install unknown apps\" permission. Please grant permission in the system settings.</string>
     <string name="ota_btn_open_settings">Open Settings</string>
+
+    <!-- GitHub Multi-Account Strings -->
+    <string name="github_switcher_title">GitHub Accounts</string>
+    <string name="github_switcher_subtitle">Switch between connected GitHub accounts or add another</string>
+    <string name="github_btn_add_account">Add GitHub Account</string>
+    <string name="github_account_switched_toast">Switched GitHub account to @%1$s</string>
+    <string name="github_account_removed_toast">Removed GitHub account @%1$s</string>
+    <string name="github_account_remove_confirm_title">Remove GitHub Account</string>
+    <string name="github_account_remove_confirm_message">Are you sure you want to remove @%1$s from saved GitHub accounts?</string>
 </resources>
 

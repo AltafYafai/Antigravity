@@ -56,9 +56,7 @@ object GitHubAuthManager {
     @Volatile
     private var cachedUser: GitHubUser? = null
 
-    fun getStoredUser(context: Context): GitHubUser? {
-        cachedUser?.let { return it }
-
+    fun getDirectStoredUser(context: Context): GitHubUser? {
         val filesDir = context.filesDir
         val homeDir = File(filesDir, "home")
         val internalHosts = File(homeDir, ".config/gh/hosts.yml")
@@ -77,15 +75,13 @@ object GitHubAuthManager {
         val effectiveUser = userFromInternal ?: prefUsername
 
         if (!effectiveToken.isNullOrBlank() && !effectiveUser.isNullOrBlank()) {
-            val user = GitHubUser(
+            return GitHubUser(
                 username = effectiveUser,
                 name = prefName,
                 email = prefEmail,
                 avatarUrl = prefAvatar,
                 token = effectiveToken
             )
-            cachedUser = user
-            return user
         }
 
         // Check external pre-staged candidate locations
@@ -107,15 +103,32 @@ object GitHubAuthManager {
                 val token = readTokenFromHostsFile(candidate)
                 val username = readUsernameFromHostsFile(candidate) ?: "github_user"
                 if (!token.isNullOrBlank()) {
-                    val user = GitHubUser(
+                    return GitHubUser(
                         username = username,
                         token = token
                     )
-                    saveCredentials(context, user)
-                    cachedUser = user
-                    return user
                 }
             }
+        }
+
+        return null
+    }
+
+    fun getStoredUser(context: Context): GitHubUser? {
+        cachedUser?.let { return it }
+
+        val active = GitHubAccountManager.getActiveAccount(context)
+        if (active != null) {
+            val user = active.toGitHubUser()
+            cachedUser = user
+            return user
+        }
+
+        val direct = getDirectStoredUser(context)
+        if (direct != null) {
+            GitHubAccountManager.saveOrUpdateAccount(context, direct, makeActive = true)
+            cachedUser = direct
+            return direct
         }
 
         return null
@@ -292,7 +305,7 @@ object GitHubAuthManager {
         Result.failure(Exception("Authentication timed out after ${maxDurationSeconds}s. Please try again."))
     }
 
-    fun saveCredentials(context: Context, user: GitHubUser) {
+    fun applyCredentials(context: Context, user: GitHubUser) {
         cachedUser = user
 
         // Save in SharedPreferences
@@ -369,6 +382,11 @@ object GitHubAuthManager {
         } catch (e: Exception) {
             Log.w(TAG, "External mirroring of GitHub credentials skipped: ${e.message}")
         }
+    }
+
+    fun saveCredentials(context: Context, user: GitHubUser) {
+        GitHubAccountManager.saveOrUpdateAccount(context, user, makeActive = true)
+        applyCredentials(context, user)
     }
 
     fun logout(context: Context) {

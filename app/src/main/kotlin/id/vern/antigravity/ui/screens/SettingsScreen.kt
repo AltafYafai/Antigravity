@@ -137,6 +137,7 @@ import id.vern.antigravity.data.ModelAvailability
 import id.vern.antigravity.data.AvailableModelInfo
 import id.vern.antigravity.data.SubscriptionTierType
 import id.vern.antigravity.oauth.StoredAccount
+import id.vern.antigravity.oauth.StoredGitHubAccount
 import id.vern.antigravity.ui.components.LogViewer
 import id.vern.antigravity.ui.theme.AntigravityBlue
 import id.vern.antigravity.ui.theme.AntigravityGreen
@@ -4007,6 +4008,148 @@ fun AccountSettingsPage(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(stringResource(R.string.github_btn_connect), color = Color.White)
+                        }
+                    }
+                }
+            }
+
+            val gitHubAccounts by viewModel.gitHubAccounts.collectAsStateWithLifecycle()
+            val otherGitHubAccounts = remember(gitHubAccounts, gitHubUser) {
+                gitHubAccounts.filter { !it.username.equals(gitHubUser?.username, ignoreCase = true) }
+            }
+
+            if (isGitHubLoggedIn || gitHubAccounts.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Text(
+                    text = stringResource(R.string.github_switcher_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.github_switcher_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                SettingsCard {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .animateContentSize()
+                    ) {
+                        if (otherGitHubAccounts.isNotEmpty()) {
+                            otherGitHubAccounts.forEachIndexed { idx, acc ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            viewModel.switchGitHubAccount(context, acc.username)
+                                        }
+                                        .padding(vertical = 8.dp, horizontal = 4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF24292E)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (!acc.avatarUrl.isNullOrBlank()) {
+                                            AsyncImage(
+                                                model = acc.avatarUrl,
+                                                contentDescription = acc.username,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_github),
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(12.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "@${acc.username}",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Medium,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            if (!acc.name.isNullOrBlank()) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "(${acc.name})",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        if (!acc.email.isNullOrBlank()) {
+                                            Text(
+                                                text = acc.email,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            viewModel.removeGitHubAccount(context, acc.username)
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = stringResource(R.string.common_delete),
+                                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+
+                                if (idx < otherGitHubAccounts.size - 1) {
+                                    HorizontalDivider(
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.15f),
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                        }
+
+                        Button(
+                            onClick = { viewModel.openGitHubSignInDialog() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF24292E)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.github_btn_add_account),
+                                color = Color.White,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }

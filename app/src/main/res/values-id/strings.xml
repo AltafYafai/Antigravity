@@ -702,5 +702,14 @@
     <string name="ota_permission_dialog_title">Izin Diperlukan</string>
     <string name="ota_permission_dialog_msg">Untuk memasang pembaruan secara langsung, Antigravity membutuhkan izin \"Pasang aplikasi tidak dikenal\". Silakan aktifkan di pengaturan sistem.</string>
     <string name="ota_btn_open_settings">Buka Pengaturan</string>
+
+    <!-- GitHub Multi-Account Strings -->
+    <string name="github_switcher_title">Akun GitHub</string>
+    <string name="github_switcher_subtitle">Beralih antar akun GitHub terhubung atau tambah akun baru</string>
+    <string name="github_btn_add_account">Tambah Akun GitHub</string>
+    <string name="github_account_switched_toast">Beralih ke akun GitHub @%1$s</string>
+    <string name="github_account_removed_toast">Menghapus akun GitHub @%1$s</string>
+    <string name="github_account_remove_confirm_title">Hapus Akun GitHub</string>
+    <string name="github_account_remove_confirm_message">Apakah Anda yakin ingin menghapus @%1$s dari daftar akun GitHub tersimpan?</string>
 </resources>
 

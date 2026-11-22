@@ -148,13 +148,13 @@ internal fun getModelQuotaPercentage(
 
     return when {
         modelId.contains("Argon", ignoreCase = true) -> {
-            val weeklyB = argonGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
+            val weeklyB = argonGroup?.buckets?.firstOrNull { it.window.equals("weekly", ignoreCase = true) || it.bucketId.contains("weekly", ignoreCase = true) }
                 ?: argonGroup?.buckets?.firstOrNull()
             Pair(weeklyB?.percentage, weeklyB?.subtext)
         }
         modelId.contains("Flash", ignoreCase = true) || modelId.contains("Neon", ignoreCase = true) -> {
-            val fiveHB = geminiGroup?.buckets?.firstOrNull { it.window == "5h" || it.bucketId.contains("5h") }
-            val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
+            val fiveHB = geminiGroup?.buckets?.firstOrNull { it.window.equals("5h", ignoreCase = true) || it.bucketId.contains("5h", ignoreCase = true) }
+            val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window.equals("weekly", ignoreCase = true) || it.bucketId.contains("weekly", ignoreCase = true) }
             if (fiveHB != null && weeklyB != null) {
                 val sub = "${fiveHB.subtext ?: ""} (Weekly: ${weeklyB.percentage}%)".trim()
                 Pair(fiveHB.percentage, sub)
@@ -164,11 +164,11 @@ internal fun getModelQuotaPercentage(
             }
         }
         modelId.contains("Carbon", ignoreCase = true) || modelId.contains("Gemini", ignoreCase = true) -> {
-            val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
+            val weeklyB = geminiGroup?.buckets?.firstOrNull { it.window.equals("weekly", ignoreCase = true) || it.bucketId.contains("weekly", ignoreCase = true) }
             Pair(weeklyB?.percentage, weeklyB?.subtext)
         }
         modelId.contains("Claude", ignoreCase = true) || modelId.contains("GPT", ignoreCase = true) -> {
-            val b = thirdPartyGroup?.buckets?.firstOrNull { it.window == "weekly" || it.bucketId.contains("weekly") }
+            val b = thirdPartyGroup?.buckets?.firstOrNull { it.window.equals("weekly", ignoreCase = true) || it.bucketId.contains("weekly", ignoreCase = true) }
             Pair(b?.percentage, b?.subtext)
         }
         else -> Pair(null, null)

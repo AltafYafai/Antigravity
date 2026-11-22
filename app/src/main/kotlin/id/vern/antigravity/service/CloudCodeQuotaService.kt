@@ -150,8 +150,8 @@ object CloudCodeQuotaService {
                     conn.sslSocketFactory = sc.socketFactory
                     conn.hostnameVerifier = allHostsValid
                 }
-                conn.connectTimeout = 2500
-                conn.readTimeout = 2500
+                conn.connectTimeout = 3000
+                conn.readTimeout = 5000
                 conn.setRequestProperty("User-Agent", "antigravity")
                 val html = conn.inputStream.bufferedReader().use { it.readText() }
                 val tokenRegex = Regex("""\"?csrfToken\"?\s*:\s*\"([^\"]+)\"""")
@@ -168,7 +168,7 @@ object CloudCodeQuotaService {
         try {
             val curlBin = findCurlBinary(context)
             val process = ProcessBuilder(
-                curlBin, "-k", "-s", "--max-time", "3",
+                curlBin, "-k", "-s", "--max-time", "6",
                 "https://127.0.0.1:$port/"
             ).redirectErrorStream(true).start()
             val html = process.inputStream.bufferedReader().use { it.readText() }
@@ -367,7 +367,7 @@ object CloudCodeQuotaService {
                 val process = ProcessBuilder(
                     curlBin,
                     "-k", "-s",
-                    "--max-time", "4",
+                    "--max-time", "10",
                     "-X", "POST",
                     "-H", "Content-Type: application/json",
                     "-H", "Connect-Protocol-Version: 1",
@@ -600,26 +600,26 @@ object CloudCodeQuotaService {
 
                             val isBucketArgon = isArgon || bId.contains("argon", ignoreCase = true) || bName.contains("argon", ignoreCase = true)
                             if (isBucketArgon) {
-                                if (bWin == "5h" || bId.contains("5h") || bName.contains("5h", ignoreCase = true) || bName.contains("Five Hour", ignoreCase = true)) {
+                                if (bWin.equals("5h", ignoreCase = true) || bId.contains("5h", ignoreCase = true) || bName.contains("5h", ignoreCase = true) || bName.contains("Five Hour", ignoreCase = true)) {
                                     continue
                                 }
-                                if (bWin == "weekly" || bId.contains("weekly") || bWin.isBlank()) {
+                                if (bWin.equals("weekly", ignoreCase = true) || bId.contains("weekly", ignoreCase = true) || bWin.isBlank()) {
                                     argonWeeklyRem = bRem
                                     argonWeeklyReset = bReset
                                 }
                             } else if (isGemini) {
-                                if (bWin == "weekly" || bId.contains("weekly")) {
+                                if (bWin.equals("weekly", ignoreCase = true) || bId.contains("weekly", ignoreCase = true)) {
                                     geminiWeeklyRem = bRem
                                     geminiWeeklyReset = bReset
-                                } else if (bWin == "5h" || bId.contains("5h")) {
+                                } else if (bWin.equals("5h", ignoreCase = true) || bId.contains("5h", ignoreCase = true)) {
                                     gemini5hRem = bRem
                                     gemini5hReset = bReset
                                 }
                             } else if (is3p) {
-                                if (bWin == "weekly" || bId.contains("weekly")) {
+                                if (bWin.equals("weekly", ignoreCase = true) || bId.contains("weekly", ignoreCase = true)) {
                                     thirdPartyWeeklyRem = bRem
                                     thirdPartyWeeklyReset = bReset
-                                } else if (bWin == "5h" || bId.contains("5h")) {
+                                } else if (bWin.equals("5h", ignoreCase = true) || bId.contains("5h", ignoreCase = true)) {
                                     thirdParty5hRem = bRem
                                     thirdParty5hReset = bReset
                                 }
@@ -689,44 +689,52 @@ object CloudCodeQuotaService {
             if (!hasGeminiGroup) {
                 val googleShared = sharedModelTitles(orderedIds, modelsMap, googleGroup = true)
                 if (googleShared.isNotEmpty() && (gemini5hRem != null || geminiWeeklyRem != null)) {
-                    val fiveHourFraction = gemini5hRem ?: 1.0
-                    val fiveHourReset = gemini5hReset
-                    val weeklyFraction = geminiWeeklyRem ?: 1.0
-                    val weeklyReset = geminiWeeklyReset
-
                     val buckets = mutableListOf<QuotaBucket>()
-                    buckets.add(
-                        QuotaBucket(
-                            bucketId = "gemini-weekly",
-                            displayName = "Weekly Limit Remaining",
-                            window = "weekly",
-                            resetTime = weeklyReset,
-                            description = if (!weeklyReset.isNullOrBlank()) {
-                                "You have used some of your weekly limit, it will fully refresh in ${formatResetCountdown(weeklyReset)}."
-                            } else {
-                                "Your individual tier weekly quota."
-                            },
-                            remainingFraction = weeklyFraction,
-                            disabled = false,
-                            subtext = formatSubtext(weeklyReset)
+
+                    // Only surface buckets backed by real quota data. Never fabricate a
+                    // 100% value (or borrow another group's value) when the live language
+                    // server has not reported the Gemini weekly pool yet.
+                    val weeklyFraction = geminiWeeklyRem
+                    if (weeklyFraction != null) {
+                        val weeklyReset = geminiWeeklyReset
+                        buckets.add(
+                            QuotaBucket(
+                                bucketId = "gemini-weekly",
+                                displayName = "Weekly Limit Remaining",
+                                window = "weekly",
+                                resetTime = weeklyReset,
+                                description = if (!weeklyReset.isNullOrBlank()) {
+                                    "You have used some of your weekly limit, it will fully refresh in ${formatResetCountdown(weeklyReset)}."
+                                } else {
+                                    "Your individual tier weekly quota."
+                                },
+                                remainingFraction = weeklyFraction,
+                                disabled = false,
+                                subtext = formatSubtext(weeklyReset)
+                            )
                         )
-                    )
-                    buckets.add(
-                        QuotaBucket(
-                            bucketId = "gemini-5h",
-                            displayName = "Five Hour Limit Remaining",
-                            window = "5h",
-                            resetTime = fiveHourReset,
-                            description = if (!fiveHourReset.isNullOrBlank()) {
-                                "You have used some of your 5-hour limit, it will fully refresh in ${formatResetCountdown(fiveHourReset)}."
-                            } else {
-                                "Resets in 5 hours"
-                            },
-                            remainingFraction = fiveHourFraction,
-                            disabled = false,
-                            subtext = formatSubtext(fiveHourReset)
+                    }
+
+                    val fiveHourFraction = gemini5hRem
+                    if (fiveHourFraction != null) {
+                        val fiveHourReset = gemini5hReset
+                        buckets.add(
+                            QuotaBucket(
+                                bucketId = "gemini-5h",
+                                displayName = "Five Hour Limit Remaining",
+                                window = "5h",
+                                resetTime = fiveHourReset,
+                                description = if (!fiveHourReset.isNullOrBlank()) {
+                                    "You have used some of your 5-hour limit, it will fully refresh in ${formatResetCountdown(fiveHourReset)}."
+                                } else {
+                                    "Resets in 5 hours"
+                                },
+                                remainingFraction = fiveHourFraction,
+                                disabled = false,
+                                subtext = formatSubtext(fiveHourReset)
+                            )
                         )
-                    )
+                    }
 
                     val geminiGroup = QuotaGroup(
                         displayName = "Gemini Models",
@@ -851,8 +859,12 @@ object CloudCodeQuotaService {
                     }
                     conn.requestMethod = "POST"
                     conn.doOutput = true
-                    conn.connectTimeout = 2000
-                    conn.readTimeout = 2000
+                    conn.connectTimeout = 3000
+                    // The local language server proxies quota lookups to Google and
+                    // routinely needs more than two seconds to answer. A tight timeout
+                    // silently pushes the app onto the remote API, which does not
+                    // report the Gemini weekly pool at all.
+                    conn.readTimeout = 8000
                     conn.setRequestProperty("Content-Type", "application/json")
                     conn.setRequestProperty("Connect-Protocol-Version", "1")
                     conn.setRequestProperty("x-antigravity-csrf-token", csrf)

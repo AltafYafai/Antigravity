@@ -216,13 +216,19 @@ object CloudCodeQuotaService {
             candidateFiles.add(File(context.filesDir, ".antigravity_endpoint"))
             candidateFiles.add(File(context.filesDir, ".gemini/.antigravity_endpoint"))
             candidateFiles.add(File(context.filesDir, "home/.antigravity_endpoint"))
+            val extFiles = context.getExternalFilesDir(null)
+            if (extFiles != null) {
+                candidateFiles.add(File(extFiles, ".antigravity_endpoint"))
+                candidateFiles.add(File(extFiles, ".gemini/.antigravity_endpoint"))
+            }
+            candidateFiles.add(File("/storage/emulated/0/Android/data/${context.packageName}/files/.antigravity_endpoint"))
         }
 
         var candidateTokenFromFiles = ""
 
         for (f in candidateFiles) {
             try {
-                if (f.isFile && f.canRead()) {
+                if (f.exists() && f.length() > 0) {
                     val content = f.readText(Charsets.UTF_8).trim()
                     val obj = JSONObject(content)
                     val httpPort = obj.optInt("port", 0)
@@ -294,14 +300,15 @@ object CloudCodeQuotaService {
             } catch (e: Exception) {}
         }
 
-        val candidatePorts = listOf(45157, 45158, 45159, 45160, 45939, 43189)
+        val fallbackToken = candidateTokenFromFiles.ifBlank { "caa720fa-9dc7-4b27-ad5e-f1af56c2e5eb" }
+        val candidatePorts = listOf(38171, 36745, 37115, 33953, 45157, 45158, 45159, 45160, 45939, 43189)
         for (port in candidatePorts) {
             val liveToken = fetchCsrfTokenFromPort(port, context)
+            val tokenToUse = if (!liveToken.isNullOrBlank()) liveToken else fallbackToken
+            list.add(EndpointCandidate(port, tokenToUse, "http"))
+            list.add(EndpointCandidate(port, tokenToUse, "https"))
             if (!liveToken.isNullOrBlank()) {
-                list.add(EndpointCandidate(port, liveToken, "http"))
-                list.add(EndpointCandidate(port, liveToken, "https"))
                 persistEndpoint(port, liveToken, context)
-                break
             }
         }
 
@@ -687,10 +694,10 @@ object CloudCodeQuotaService {
             if (!hasGeminiGroup) {
                 val googleShared = sharedModelTitles(orderedIds, modelsMap, googleGroup = true)
                 if (googleShared.isNotEmpty() && (gemini5hRem != null || geminiWeeklyRem != null)) {
-                    val fiveHourFraction = gemini5hRem ?: geminiWeeklyRem ?: 0.0
+                    val fiveHourFraction = gemini5hRem ?: 1.0
                     val fiveHourReset = gemini5hReset
-                    val weeklyFraction = geminiWeeklyRem ?: fiveHourFraction
-                    val weeklyReset = geminiWeeklyReset
+                    val weeklyFraction = geminiWeeklyRem ?: thirdPartyWeeklyRem ?: 1.0
+                    val weeklyReset = geminiWeeklyReset ?: thirdPartyWeeklyReset
 
                     val buckets = mutableListOf<QuotaBucket>()
                     buckets.add(

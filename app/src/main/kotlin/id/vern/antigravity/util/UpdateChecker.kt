@@ -197,8 +197,8 @@ class UpdateChecker(private val context: Context) {
         val hasUpdate = isNewerVersion(currentVersion, latest.version)
 
         if (hasUpdate) {
-            val intervening = validReleases.filter { isNewerVersion(currentVersion, it.version) }
-            val structuredChangelogs = intervening.map { rel ->
+            val targetReleases = listOf(latest)
+            val structuredChangelogs = targetReleases.map { rel ->
                 ReleaseChangelog(
                     version = rel.version,
                     title = rel.title,
@@ -208,8 +208,8 @@ class UpdateChecker(private val context: Context) {
                 )
             }
 
-            val fullFormattedBody = intervening.joinToString("\n\n") { rel ->
-                "### ${rel.title.ifBlank { rel.version }}\n${rel.body.trim()}"
+            val fullFormattedBody = latest.body.trim().ifBlank {
+                "### ${latest.title.ifBlank { latest.version }}\nNo changelog provided."
             }
 
             val updateInfo = UpdateInfo(

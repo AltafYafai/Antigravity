@@ -121,8 +121,12 @@ object TerminalSessionManager {
         val name = "Session $nextNum (Bionic Shell)"
         sessionNames.add(name)
         currentSessionName.value = name
-        sessionBuffers[name] = mutableListOf()
+        val newBuf = mutableListOf<TerminalLine>()
+        val startLine = TerminalLine(text = "[Session $nextNum (Bionic Shell)]", isCommand = true)
+        newBuf.add(startLine)
+        sessionBuffers[name] = newBuf
         lines.clear()
+        lines.add(startLine)
     }
 
     fun ensureAgyLiveSession(autoSwitch: Boolean = false) {
@@ -203,8 +207,8 @@ object TerminalSessionManager {
                 } else {
                     lines.add(TerminalLine(text = clean, isError = isError))
                 }
-                if (lines.size > 2000) {
-                    lines.removeRange(0, lines.size - 2000)
+                if (lines.size > 50000) {
+                    lines.removeRange(0, lines.size - 50000)
                 }
             } catch (e: Exception) {}
         }
@@ -217,43 +221,46 @@ object TerminalSessionManager {
     fun appendAgyLine(text: String, isError: Boolean = false, isCommand: Boolean = false) {
         val clean = cleanAnsi(text)
         if (clean.isEmpty()) return
-        val item = TerminalLine(text = clean, isError = isError, isCommand = isCommand)
+        val splitLines = clean.lines()
 
-        synchronized(sessionBuffers) {
-            val buf = sessionBuffers.getOrPut(AGY_SESSION_NAME) { mutableListOf() }
-            buf.add(item)
-            if (buf.size > 2000) {
-                buf.subList(0, buf.size - 2000).clear()
+        for (lineStr in splitLines) {
+            val item = TerminalLine(text = lineStr, isError = isError, isCommand = isCommand)
+            synchronized(sessionBuffers) {
+                val buf = sessionBuffers.getOrPut(AGY_SESSION_NAME) { mutableListOf() }
+                buf.add(item)
+                if (buf.size > 50000) {
+                    buf.subList(0, buf.size - 50000).clear()
+                }
+            }
+            if (currentSessionName.value == AGY_SESSION_NAME) {
+                pendingAgyLines.add(item)
             }
         }
 
-        if (currentSessionName.value == AGY_SESSION_NAME) {
-            pendingAgyLines.add(item)
-            if (!isAgyFlushPending) {
-                isAgyFlushPending = true
-                mainHandler.postDelayed({
-                    isAgyFlushPending = false
-                    try {
-                        if (currentSessionName.value == AGY_SESSION_NAME) {
-                            var count = 0
-                            while (!pendingAgyLines.isEmpty() && count < 60) {
-                                val l = pendingAgyLines.poll() ?: break
-                                lines.add(l)
-                                count++
-                            }
-                            if (lines.size > 2000) {
-                                lines.removeRange(0, lines.size - 2000)
-                            }
-                            if (!pendingAgyLines.isEmpty()) {
-                                isAgyFlushPending = true
-                                mainHandler.postDelayed({ isAgyFlushPending = false }, 60L)
-                            }
-                        } else {
-                            pendingAgyLines.clear()
+        if (currentSessionName.value == AGY_SESSION_NAME && !isAgyFlushPending) {
+            isAgyFlushPending = true
+            mainHandler.postDelayed({
+                isAgyFlushPending = false
+                try {
+                    if (currentSessionName.value == AGY_SESSION_NAME) {
+                        var count = 0
+                        while (!pendingAgyLines.isEmpty() && count < 200) {
+                            val l = pendingAgyLines.poll() ?: break
+                            lines.add(l)
+                            count++
                         }
-                    } catch (e: Exception) {}
-                }, 80L)
-            }
+                        if (lines.size > 50000) {
+                            lines.removeRange(0, lines.size - 50000)
+                        }
+                        if (!pendingAgyLines.isEmpty()) {
+                            isAgyFlushPending = true
+                            mainHandler.postDelayed({ appendAgyLine("") }, 30L)
+                        }
+                    } else {
+                        pendingAgyLines.clear()
+                    }
+                } catch (e: Exception) {}
+            }, 30L)
         }
     }
 

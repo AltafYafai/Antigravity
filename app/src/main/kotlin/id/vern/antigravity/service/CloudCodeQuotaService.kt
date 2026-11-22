@@ -469,7 +469,8 @@ object CloudCodeQuotaService {
                             val bDis = bObj.optBoolean("disabled", false)
                             val bSub = formatSubtext(bReset)
 
-                            if (isArgon) {
+                            val isBucketArgon = isArgon || bId.contains("argon", ignoreCase = true) || bName.contains("argon", ignoreCase = true)
+                            if (isBucketArgon) {
                                 if (bWin == "5h" || bId.contains("5h") || bName.contains("5h", ignoreCase = true) || bName.contains("Five Hour", ignoreCase = true)) {
                                     continue
                                 }
@@ -619,7 +620,7 @@ object CloudCodeQuotaService {
             if (!isArgonSupported) {
                 groupsList.removeAll { it.displayName.contains("argon", ignoreCase = true) }
             } else if (!hasArgonGroup && (argonShared.isNotEmpty() || cliArgonTitles.isNotEmpty()) && argonWeeklyRem != null) {
-                val aWeeklyFraction = argonWeeklyRem!!
+                val aWeeklyFraction = argonWeeklyRem
                 val aWeeklyReset = argonWeeklyReset
 
                 val aBuckets = mutableListOf<QuotaBucket>()
@@ -664,7 +665,8 @@ object CloudCodeQuotaService {
             val availableModels = buildAvailableModels(
                 orderedIds, modelsMap,
                 gemini5hRem ?: geminiWeeklyRem, gemini5hReset ?: geminiWeeklyReset,
-                if (!isArgonSupported) null else argonWeeklyRem, if (!isArgonSupported) null else argonWeeklyReset,
+                if (!isArgonSupported) null else argonWeeklyRem,
+                if (!isArgonSupported) null else argonWeeklyReset,
                 thirdPartyWeeklyRem, thirdPartyWeeklyReset
             )
 

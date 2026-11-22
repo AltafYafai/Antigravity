@@ -43,24 +43,7 @@ data class AvailableModelInfo(
                 (query.contains("GPT", ignoreCase = true) && (modelId.contains("GPT", ignoreCase = true) || displayName.contains("GPT", ignoreCase = true)))
     }
 
-    val requiredTier: SubscriptionTierType get() {
-        val id = modelId.lowercase()
-        val name = displayName.lowercase()
-        return when {
-            id.contains("carbon") || id.contains("hydrogen") -> SubscriptionTierType.ULTRA
-            id.contains("argon") || id.contains("neon") || id.contains("claude") || id.contains("sonnet") || id.contains("opus") || id.contains("gpt") || name.contains("claude") || name.contains("gpt") -> SubscriptionTierType.PRO
-            else -> SubscriptionTierType.FREE
-        }
-    }
 
-    fun isAccessibleWithTier(userTier: SubscriptionTierType): Boolean {
-        return when (requiredTier) {
-            SubscriptionTierType.ULTRA -> userTier == SubscriptionTierType.ULTRA
-            SubscriptionTierType.PRO -> userTier == SubscriptionTierType.PRO || userTier == SubscriptionTierType.ULTRA || userTier == SubscriptionTierType.ENTERPRISE
-            SubscriptionTierType.ENTERPRISE -> userTier == SubscriptionTierType.ENTERPRISE || userTier == SubscriptionTierType.ULTRA
-            SubscriptionTierType.FREE -> true
-        }
-    }
 }
 
 enum class SubscriptionTierType {

@@ -465,9 +465,7 @@ fun ChatBubble(
                                                     .verticalScroll(singleThoughtScroll)
                                                     .padding(10.dp)
                                             ) {
-                                                val displayThought = remember(thoughtDetail) {
-                                                    if (thoughtDetail.length > 5000) "... " + thoughtDetail.takeLast(5000) else thoughtDetail
-                                                }
+                                                val displayThought = thoughtDetail
                                                 Text(
                                                     text = displayThought,
                                                     style = MaterialTheme.typography.bodySmall.copy(
@@ -667,9 +665,7 @@ fun ChatBubble(
                                             .verticalScroll(thoughtScroll)
                                             .padding(10.dp)
                                     ) {
-                                        val displayThought = remember(liveThinking) {
-                                            if (liveThinking.length > 5000) "... " + liveThinking.takeLast(5000) else liveThinking
-                                        }
+                                        val displayThought = liveThinking
                                         Text(
                                             text = displayThought,
                                             style = MaterialTheme.typography.bodySmall.copy(
@@ -1130,10 +1126,7 @@ fun AgentExecutionStepsView(
                                         .verticalScroll(thoughtScroll)
                                         .padding(10.dp)
                                 ) {
-                                    val displayThought = remember(step.detail) {
-                                        val raw = step.detail ?: ""
-                                        if (raw.length > 5000) "... " + raw.takeLast(5000) else raw
-                                    }
+                                    val displayThought = step.detail ?: ""
                                     Text(
                                         text = displayThought,
                                         style = MaterialTheme.typography.bodySmall.copy(
@@ -1359,10 +1352,7 @@ fun AgentExecutionStepsView(
                                             .horizontalScroll(cmdHScrollState)
                                             .padding(8.dp)
                                     ) {
-                                        val displayCmd = remember(step.detail) {
-                                            val raw = step.detail ?: ""
-                                            if (raw.length > 2000) "... " + raw.takeLast(2000) else raw
-                                        }
+                                        val displayCmd = step.detail ?: ""
                                         Text(
                                             text = displayCmd,
                                             fontFamily = FontFamily.Monospace,

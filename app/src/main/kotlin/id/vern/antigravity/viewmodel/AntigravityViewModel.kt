@@ -20,6 +20,7 @@ import id.vern.antigravity.data.AttachedFile
 import id.vern.antigravity.data.ChatMessage
 import id.vern.antigravity.data.QueuedMessage
 import id.vern.antigravity.data.RunningTask
+import id.vern.antigravity.data.RunningSubagent
 import id.vern.antigravity.data.DaemonTask
 import id.vern.antigravity.data.AgentExecutionStep
 import id.vern.antigravity.data.AgentStepKind
@@ -229,6 +230,9 @@ class AntigravityViewModel : ViewModel() {
 
     private val mutableRunningTasks = MutableStateFlow<List<RunningTask>>(emptyList())
     val runningTasks: StateFlow<List<RunningTask>> = mutableRunningTasks.asStateFlow()
+
+    private val mutableRunningSubagents = MutableStateFlow<List<RunningSubagent>>(emptyList())
+    val runningSubagents: StateFlow<List<RunningSubagent>> = mutableRunningSubagents.asStateFlow()
 
     private val mutableDaemonTasks = MutableStateFlow<List<DaemonTask>>(emptyList())
     val daemonTasks: StateFlow<List<DaemonTask>> = mutableDaemonTasks.asStateFlow()
@@ -3447,6 +3451,56 @@ class AntigravityViewModel : ViewModel() {
         }
     }
 
+    fun addRunningSubagent(subagent: RunningSubagent) {
+        mutableRunningSubagents.update { list ->
+            val idx = list.indexOfFirst { it.id == subagent.id || (it.conversationId != null && it.conversationId == subagent.conversationId) }
+            if (idx >= 0) {
+                list.toMutableList().apply { set(idx, subagent) }
+            } else {
+                list + subagent
+            }
+        }
+    }
+
+    fun completeSubagent(convIdOrId: String) {
+        mutableRunningSubagents.update { list ->
+            list.map { if (it.conversationId == convIdOrId || it.id == convIdOrId) it.copy(isRunning = false) else it }
+        }
+    }
+
+    fun removeRunningSubagent(id: String) {
+        mutableRunningSubagents.update { list -> list.filter { it.id != id && it.conversationId != id } }
+    }
+
+    fun stopSubagent(id: String) {
+        removeRunningSubagent(id)
+    }
+
+    fun loadSubagentMessages(context: Context, convId: String?): List<ChatMessage> {
+        if (convId.isNullOrBlank()) return emptyList()
+        val persisted = ConversationPersistence.loadMessagesForConversation(context, convId)
+        if (persisted.isNotEmpty()) return persisted
+        return TranscriptTurnParser.parseTranscriptToMessages(context, convId)
+    }
+
+    fun openSubagentAsActiveConversation(context: Context, subagent: RunningSubagent) {
+        val convId = subagent.conversationId ?: subagent.id
+        val title = subagent.role.ifEmpty { subagent.typeName.ifEmpty { context.getString(R.string.subagent_default_title) } }
+        val summary = ConversationSummary(
+            id = convId,
+            title = title,
+            timestamp = System.currentTimeMillis(),
+            messageCount = 1,
+            isPinned = false,
+            projectPath = mutableWorkspacePath.value
+        )
+        val history = ConversationPersistence.loadConversationHistory(context)
+        if (history.none { it.id == convId }) {
+            ConversationPersistence.saveConversationHistory(context, listOf(summary) + history)
+        }
+        loadConversation(context, summary)
+    }
+
     fun loadDaemonTasks(context: Context) {
         viewModelScope.launch(Dispatchers.IO) {
             val tasks = mutableListOf<DaemonTask>()
@@ -4116,13 +4170,24 @@ class AntigravityViewModel : ViewModel() {
                                                         stepTitle = when {
                                                             action.isNotBlank() -> action
                                                             summary.isNotBlank() -> summary
-                                                            cleanCmd.length > 35 -> cleanCmd.take(32) + "..."
-                                                            else -> cleanCmd.ifEmpty { "Command" }
+                                                            cleanCmd.isNotBlank() -> cleanCmd
+                                                            else -> "Command"
                                                         }
                                                         stepFilePath = null
                                                         stepLines = null
                                                         stepDiff = null
                                                         stepKind = AgentStepKind.COMMAND
+                                                    }
+                                                    "invoke_subagent" -> {
+                                                        val subList = params?.optJSONArray("Subagents")
+                                                        val firstSub = subList?.optJSONObject(0) ?: params
+                                                        val role = firstSub?.optString("Role")?.ifEmpty { firstSub.optString("role") } ?: ""
+                                                        val type = firstSub?.optString("TypeName")?.ifEmpty { firstSub.optString("typeName") } ?: ""
+                                                        stepTitle = role.ifEmpty { type.ifEmpty { context.getString(R.string.subagent_default_title) } }
+                                                        stepFilePath = null
+                                                        stepLines = null
+                                                        stepDiff = null
+                                                        stepKind = AgentStepKind.WORKING
                                                     }
                                                     "manage_task" -> {
                                                         val action = params?.optString("Action") ?: "status"
@@ -4143,7 +4208,7 @@ class AntigravityViewModel : ViewModel() {
                                                     }
                                                     "search_web" -> {
                                                         val q = params?.optString("query")?.trim()?.removeSurrounding("\"") ?: ""
-                                                        stepTitle = if (q.length > 30) q.take(27) + "..." else q.ifEmpty { "web" }
+                                                        stepTitle = q.ifEmpty { "web" }
                                                         stepFilePath = null
                                                         stepLines = null
                                                         stepDiff = null
@@ -4151,7 +4216,7 @@ class AntigravityViewModel : ViewModel() {
                                                     }
                                                     "grep_search" -> {
                                                         val q = params?.optString("query")?.trim()?.removeSurrounding("\"") ?: ""
-                                                        stepTitle = if (q.length > 30) q.take(27) + "..." else q.ifEmpty { "code" }
+                                                        stepTitle = q.ifEmpty { "code" }
                                                         stepFilePath = null
                                                         stepLines = null
                                                         stepDiff = null
@@ -4177,7 +4242,7 @@ class AntigravityViewModel : ViewModel() {
                                                 val stepDetail = stepUpdate.optString("output").ifEmpty {
                                                     stepUpdate.optString("result").ifEmpty { null }
                                                 }
-                                                val safeDetail = if (stepDetail != null && stepDetail.length > 3000) stepDetail.take(3000) + "\n... [truncated]" else stepDetail
+                                                val safeDetail = stepDetail
 
                                                 val stableStepId = "step_live_${stepKind.name}_${stepFilePath ?: stepTitle}_${stepLines ?: ""}".replace(" ", "_")
                                                 val execStep = AgentExecutionStep(
@@ -4191,6 +4256,68 @@ class AntigravityViewModel : ViewModel() {
                                                     isCompleted = state != "ACTIVE"
                                                 )
 
+                                                if (toolName == "run_command") {
+                                                    val cmdClean = params?.optString("CommandLine")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'") ?: ""
+                                                    if (state == "ACTIVE") {
+                                                        if (cmdClean.isNotBlank() && mutableRunningTasks.value.none { it.id == stableStepId || it.command == cmdClean }) {
+                                                            mutableRunningTasks.update { it + RunningTask(id = stableStepId, name = stepTitle, command = cmdClean) }
+                                                        }
+                                                    } else {
+                                                        removeRunningTask(stableStepId)
+                                                        if (cmdClean.isNotBlank()) {
+                                                            mutableRunningTasks.update { list -> list.filter { it.command != cmdClean } }
+                                                        }
+                                                    }
+                                                } else if (toolName == "invoke_subagent") {
+                                                    if (state == "ACTIVE") {
+                                                        val subList = params?.optJSONArray("Subagents")
+                                                        if (subList != null && subList.length() > 0) {
+                                                            for (s in 0 until subList.length()) {
+                                                                val sObj = subList.optJSONObject(s) ?: continue
+                                                                val r = sObj.optString("Role").ifEmpty { sObj.optString("role") }
+                                                                val t = sObj.optString("TypeName").ifEmpty { sObj.optString("typeName") }
+                                                                val p = sObj.optString("Prompt").ifEmpty { sObj.optString("prompt") }
+                                                                val subId = "${stableStepId}_$s"
+                                                                addRunningSubagent(RunningSubagent(id = subId, typeName = t, role = r, prompt = p, isRunning = true))
+                                                            }
+                                                        } else {
+                                                            val r = params?.optString("Role")?.ifEmpty { params.optString("role") } ?: context.getString(R.string.subagent_default_title)
+                                                            val t = params?.optString("TypeName")?.ifEmpty { params.optString("typeName") } ?: ""
+                                                            val p = params?.optString("Prompt")?.ifEmpty { params.optString("prompt") } ?: ""
+                                                            addRunningSubagent(RunningSubagent(id = stableStepId, typeName = t, role = r, prompt = p, isRunning = true))
+                                                        }
+                                                    } else {
+                                                        val detectedSubConvId = try {
+                                                            if (!stepDetail.isNullOrBlank()) {
+                                                                val detailJson = JSONObject(stepDetail)
+                                                                val res = detailJson.optJSONObject("result")
+                                                                res?.optString("conversationId")?.ifEmpty { null }
+                                                                    ?: detailJson.optString("conversationId").ifEmpty { null }
+                                                            } else null
+                                                        } catch (e: Exception) {
+                                                            val regex = "([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})".toRegex()
+                                                            stepDetail?.let { regex.find(it)?.value }
+                                                        }
+                                                        if (!detectedSubConvId.isNullOrBlank()) {
+                                                            mutableRunningSubagents.update { list ->
+                                                                list.map { if (it.id.startsWith(stableStepId) && it.conversationId == null) it.copy(conversationId = detectedSubConvId) else it }
+                                                            }
+                                                            val summary = ConversationSummary(
+                                                                id = detectedSubConvId,
+                                                                title = stepTitle,
+                                                                timestamp = System.currentTimeMillis(),
+                                                                messageCount = 1,
+                                                                isPinned = false,
+                                                                projectPath = validWsDir?.absolutePath
+                                                            )
+                                                            val history = ConversationPersistence.loadConversationHistory(context)
+                                                            if (history.none { it.id == detectedSubConvId }) {
+                                                                ConversationPersistence.saveConversationHistory(context, listOf(summary) + history)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
                                                 if (state == "ACTIVE") {
                                                     val toolDesc = when {
                                                         stepKind == AgentStepKind.COMMAND -> "$stepTitle"
@@ -4202,7 +4329,7 @@ class AntigravityViewModel : ViewModel() {
                                                     TerminalSessionManager.appendAgyLine("> $toolDesc", isCommand = true)
                                                 } else {
                                                     if (!stepDetail.isNullOrBlank()) {
-                                                        TerminalSessionManager.appendAgyLine(if (stepDetail.length > 2000) stepDetail.take(2000) + "\n... [truncated]" else stepDetail)
+                                                        TerminalSessionManager.appendAgyLine(stepDetail)
                                                     }
                                                 }
 
@@ -4251,8 +4378,8 @@ class AntigravityViewModel : ViewModel() {
                                                 val now = System.currentTimeMillis()
                                                 if (now - lastStepUpdateMs > 300L) {
                                                     lastStepUpdateMs = now
-                                                    if (thoughtText.isNotBlank() && thoughtText.length < 150) {
-                                                        TerminalSessionManager.appendAgyLine("* Thinking: ${thoughtText.take(120).replace('\n', ' ')}...")
+                                                    if (thoughtText.isNotBlank()) {
+                                                        TerminalSessionManager.appendAgyLine("* Thinking: ${thoughtText.replace('\n', ' ')}")
                                                     }
                                                     mutableChatMessages.update { list ->
                                                         list.map { msg ->
@@ -4499,6 +4626,8 @@ class AntigravityViewModel : ViewModel() {
                 mutableIsExecuting.value = false
                 mutableActiveWorkingStatus.value = null
                 currentAiExecutionJob = null
+                mutableRunningTasks.value = emptyList()
+                mutableRunningSubagents.update { list -> list.map { it.copy(isRunning = false) } }
                 val currentList = mutableChatMessages.value
                 mutableConversationHistory.update { list ->
                     list.map { if (it.id == convId) it.copy(messageCount = currentList.size, timestamp = System.currentTimeMillis()) else it }

@@ -71,9 +71,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
 import android.widget.Toast
+import id.vern.antigravity.data.RunningSubagent
 import id.vern.antigravity.ui.components.AgentDetailsBottomSheet
 import id.vern.antigravity.ui.components.DialogBlurEffect
 import id.vern.antigravity.ui.components.InstallationProgressDialog
+import id.vern.antigravity.ui.components.SubagentChatBottomSheet
 import id.vern.antigravity.viewmodel.ConversationSummary
 import java.io.File
 import androidx.compose.foundation.layout.wrapContentHeight
@@ -170,6 +172,7 @@ fun ChatScreen(
     val quotaErrorMessage by viewModel.quotaErrorMessage.collectAsStateWithLifecycle()
     val queuedMessages by viewModel.queuedMessages.collectAsStateWithLifecycle()
     val runningTasks by viewModel.runningTasks.collectAsStateWithLifecycle()
+    val runningSubagents by viewModel.runningSubagents.collectAsStateWithLifecycle()
     val slashActions by viewModel.slashActions.collectAsStateWithLifecycle()
     val appearance by viewModel.appearanceConfig.collectAsStateWithLifecycle()
     val themePreset by viewModel.themePreset.collectAsStateWithLifecycle()
@@ -181,6 +184,7 @@ fun ChatScreen(
     var showDetailsBottomSheet by remember { mutableStateOf(false) }
     var detailsBottomSheetTab by remember { mutableIntStateOf(0) }
     var fileToOpenInEditor by remember { mutableStateOf<String?>(null) }
+    var selectedSubagent by remember { mutableStateOf<RunningSubagent?>(null) }
     var showSettingsBottomSheet by remember { mutableStateOf(false) }
     var showSkillsDialog by remember { mutableStateOf(false) }
     var showPluginsDialog by remember { mutableStateOf(false) }
@@ -1629,6 +1633,7 @@ fun ChatScreen(
                     attachedFiles = attachedFiles,
                     queuedMessages = queuedMessages,
                     runningTasks = runningTasks,
+                    runningSubagents = runningSubagents,
                     externalInputText = pendingInputText,
                     onExternalInputTextConsumed = { viewModel.clearPendingInputText() },
                     onSendMessage = { text ->
@@ -1655,6 +1660,8 @@ fun ChatScreen(
                     onRemoveQueuedMessage = { id -> viewModel.removeQueuedMessage(id) },
                     onStopTask = { taskId -> viewModel.stopRunningTask(taskId) },
                     onTaskClick = { task -> viewModel.requestOpenTerminal(task.command) },
+                    onSubagentClick = { subagent -> selectedSubagent = subagent },
+                    onStopSubagent = { subagentId -> viewModel.stopSubagent(subagentId) },
                     onGetWorkspaceFiles = { query -> viewModel.getWorkspaceFiles(query) },
                     slashActions = slashActions,
                     onSlashMenuOpened = { viewModel.refreshCliSlashCommands(context) },
@@ -1860,6 +1867,21 @@ fun ChatScreen(
             onDismissRequest = {
                 showDetailsBottomSheet = false
                 fileToOpenInEditor = null
+            }
+        )
+    }
+
+    if (selectedSubagent != null) {
+        SubagentChatBottomSheet(
+            subagent = selectedSubagent!!,
+            viewModel = viewModel,
+            onDismissRequest = { selectedSubagent = null },
+            onOpenFullScreen = {
+                val target = selectedSubagent
+                selectedSubagent = null
+                if (target != null) {
+                    viewModel.openSubagentAsActiveConversation(context, target)
+                }
             }
         )
     }

@@ -142,7 +142,11 @@ object ConversationPersistence {
     fun loadMessagesForConversation(context: Context, conversationId: String): List<ChatMessage> {
         try {
             val file = File(File(context.filesDir, "conversations"), "$conversationId.json")
-            if (!file.exists()) return emptyList()
+            if (!file.exists()) {
+                val transcriptMessages = TranscriptTurnParser.parseTranscriptToMessages(context, conversationId)
+                if (transcriptMessages.isNotEmpty()) return transcriptMessages
+                return emptyList()
+            }
             val text = file.readText()
             if (text.isBlank()) return emptyList()
             val array = JSONArray(text)

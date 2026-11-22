@@ -170,11 +170,11 @@ fun CodeEditor(
                 available: Offset,
                 source: NestedScrollSource
             ): Offset {
-                return Offset(0f, available.y)
+                return available
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                return Velocity(0f, available.y)
+                return available
             }
         }
     }
@@ -327,17 +327,6 @@ fun CodeEditor(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(stringResource(R.string.editor_btn_save), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    IconButton(
-                        onClick = onCloseTab,
-                        modifier = Modifier.size(34.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = stringResource(R.string.editor_btn_close),
-                            modifier = Modifier.size(18.dp)
-                        )
                     }
                 }
             }

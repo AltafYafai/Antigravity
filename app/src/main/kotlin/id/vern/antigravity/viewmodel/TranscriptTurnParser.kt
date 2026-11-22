@@ -1,13 +1,18 @@
 package id.vern.antigravity.viewmodel
 
 import android.content.Context
+import id.vern.antigravity.R
 import id.vern.antigravity.data.AgentExecutionStep
 import id.vern.antigravity.data.AgentStepKind
+import id.vern.antigravity.data.ChatMessage
+import id.vern.antigravity.data.MessageRole
+import id.vern.antigravity.data.MessageStatus
 import org.json.JSONObject
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 data class ParsedTranscriptTurn(
@@ -189,7 +194,7 @@ object TranscriptTurnParser {
                             ((currTimestampMs - prevTimestampMs) / 1000).toInt().coerceIn(1, 300)
                         } else 6
 
-                        val safeThinking = if (thinking.length > 5000) thinking.take(5000) + "\n... [truncated]" else thinking
+                        val safeThinking = thinking
                         steps.add(
                             AgentExecutionStep(
                                 id = "step_${i}_thought",
@@ -263,10 +268,10 @@ object TranscriptTurnParser {
                                     val title = when {
                                         action.isNotBlank() -> action
                                         summary.isNotBlank() -> summary
-                                        cmd.length > 35 -> cmd.take(32) + "..."
-                                        else -> cmd.ifEmpty { "Command" }
+                                        cmd.isNotBlank() -> cmd
+                                        else -> "Command"
                                     }
-                                    val safeCmdDetail = if (nextGenericContent != null && nextGenericContent.length > 3000) nextGenericContent.take(3000) + "\n... [truncated]" else nextGenericContent
+                                    val safeCmdDetail = nextGenericContent
                                     steps.add(
                                         AgentExecutionStep(
                                             id = "step_${i}_tool_${t}",
@@ -294,7 +299,7 @@ object TranscriptTurnParser {
                                         AgentExecutionStep(
                                             id = "step_${i}_tool_${t}",
                                             kind = AgentStepKind.SEARCH,
-                                            title = if (q.length > 30) q.take(27) + "..." else q.ifEmpty { "web" },
+                                            title = q.ifEmpty { "web" },
                                             isCompleted = true
                                         )
                                     )
@@ -325,6 +330,214 @@ object TranscriptTurnParser {
             )
         } catch (e: Throwable) {
             ParsedTranscriptTurn()
+        }
+    }
+
+    fun parseTranscriptToMessages(context: Context, cliConvId: String?): List<ChatMessage> {
+        val transcriptFile = findActiveTranscriptFile(context, cliConvId) ?: return emptyList()
+        return try {
+            val lines = transcriptFile.readLines().filter { it.isNotBlank() }
+            if (lines.isEmpty()) return emptyList()
+
+            val messages = mutableListOf<ChatMessage>()
+            var currentAssistantSteps = mutableListOf<AgentExecutionStep>()
+            var currentThinking = StringBuilder()
+            var currentResponseText: String? = null
+            var currentAssistantTimestamp = 0L
+
+            fun flushAssistantIfNeeded() {
+                if (currentAssistantSteps.isNotEmpty() || currentThinking.isNotEmpty() || !currentResponseText.isNullOrBlank()) {
+                    val finalThinking = if (currentThinking.isNotEmpty()) currentThinking.toString().trim() else null
+                    val resp = currentResponseText ?: ""
+                    messages.add(
+                        ChatMessage(
+                            id = UUID.randomUUID().toString(),
+                            role = MessageRole.ASSISTANT,
+                            content = resp,
+                            timestamp = if (currentAssistantTimestamp > 0L) currentAssistantTimestamp else System.currentTimeMillis(),
+                            thinking = finalThinking,
+                            steps = currentAssistantSteps.toList()
+                        )
+                    )
+                    currentAssistantSteps = mutableListOf()
+                    currentThinking = StringBuilder()
+                    currentResponseText = null
+                    currentAssistantTimestamp = 0L
+                }
+            }
+
+            for (i in lines.indices) {
+                val raw = lines[i]
+                val obj = try { JSONObject(raw) } catch (e: Throwable) { continue }
+                val type = obj.optString("type")
+                val createdAt = obj.optString("created_at")
+                val timestamp = parseIsoTimestamp(createdAt).let { if (it > 0L) it else System.currentTimeMillis() }
+
+                if (type == "USER_INPUT") {
+                    flushAssistantIfNeeded()
+                    val text = obj.optString("content").trim()
+                    if (text.isNotEmpty()) {
+                        messages.add(
+                            ChatMessage(
+                                id = UUID.randomUUID().toString(),
+                                role = MessageRole.USER,
+                                content = text,
+                                timestamp = timestamp
+                            )
+                        )
+                    }
+                } else if (type == "SYSTEM_MESSAGE") {
+                    flushAssistantIfNeeded()
+                    var content = obj.optString("content").trim()
+                    if (content.contains("<SYSTEM_MESSAGE>")) {
+                        content = content.substringAfter("<SYSTEM_MESSAGE>").substringBefore("</SYSTEM_MESSAGE>").trim()
+                    }
+                    if (content.contains("content=")) {
+                        content = content.substringAfter("content=").trim()
+                    }
+                    if (content.isNotEmpty()) {
+                        messages.add(
+                            ChatMessage(
+                                id = UUID.randomUUID().toString(),
+                                role = MessageRole.USER,
+                                content = content,
+                                timestamp = timestamp
+                            )
+                        )
+                    }
+                } else if (type == "PLANNER_RESPONSE") {
+                    if (currentAssistantTimestamp == 0L) {
+                        currentAssistantTimestamp = timestamp
+                    }
+                    val text = obj.optString("content").trim()
+                    if (text.isNotEmpty()) {
+                        currentResponseText = text
+                    }
+                    val thinking = obj.optString("thinking").trim()
+                    if (thinking.isNotEmpty()) {
+                        if (currentThinking.isNotEmpty()) currentThinking.append("\n\n")
+                        currentThinking.append(thinking)
+                        currentAssistantSteps.add(
+                            AgentExecutionStep(
+                                id = "step_${i}_thought",
+                                kind = AgentStepKind.THOUGHT,
+                                title = context.getString(R.string.chat_thought_process),
+                                detail = thinking,
+                                durationSeconds = 6,
+                                isCompleted = true
+                            )
+                        )
+                    }
+                    val toolCalls = obj.optJSONArray("tool_calls")
+                    if (toolCalls != null && toolCalls.length() > 0) {
+                        for (t in 0 until toolCalls.length()) {
+                            val tc = toolCalls.optJSONObject(t) ?: continue
+                            val toolName = tc.optString("name").substringAfterLast(":")
+                            val args = tc.optJSONObject("args")
+                                ?: tc.optJSONObject("parameters")
+                                ?: tc.optJSONObject("arguments")
+
+                            val nextGenericContent = if (i + 1 < lines.size) {
+                                try {
+                                    val nextObj = JSONObject(lines[i + 1])
+                                    if (nextObj.optString("type") == "GENERIC") {
+                                        nextObj.optString("content").ifBlank { null }
+                                    } else null
+                                } catch (e: Throwable) { null }
+                            } else null
+
+                            when (toolName) {
+                                "read_file", "view_file" -> {
+                                    val path = extractPathFromParams(args)
+                                    val fileName = extractFileNameFromPath(path, fallback = "file")
+                                    val start = args?.optInt("StartLine", -1) ?: -1
+                                    val end = args?.optInt("EndLine", -1) ?: -1
+                                    val linesStr = if (start > 0 && end >= start) "#L$start-$end" else if (start > 0) "#L$start" else null
+                                    currentAssistantSteps.add(
+                                        AgentExecutionStep(
+                                            id = "step_${i}_tool_${t}",
+                                            kind = AgentStepKind.ANALYZED,
+                                            title = fileName,
+                                            filePath = path.ifEmpty { null },
+                                            lines = linesStr,
+                                            detail = nextGenericContent,
+                                            isCompleted = true
+                                        )
+                                    )
+                                }
+                                "write_to_file", "replace_file_content" -> {
+                                    val path = extractPathFromParams(args)
+                                    val fileName = extractFileNameFromPath(path, fallback = "file")
+                                    val targetContent = args?.optString("TargetContent") ?: ""
+                                    val replacementContent = args?.optString("ReplacementContent") ?: args?.optString("CodeContent") ?: ""
+                                    val delCount = if (targetContent.isNotBlank()) targetContent.count { it == '\n' } + 1 else 0
+                                    val addCount = if (replacementContent.isNotBlank()) replacementContent.count { it == '\n' } + 1 else 1
+                                    currentAssistantSteps.add(
+                                        AgentExecutionStep(
+                                            id = "step_${i}_tool_${t}",
+                                            kind = AgentStepKind.EDITED,
+                                            title = fileName,
+                                            filePath = path.ifEmpty { null },
+                                            diff = "+$addCount -$delCount",
+                                            detail = nextGenericContent,
+                                            isCompleted = true
+                                        )
+                                    )
+                                }
+                                "run_command" -> {
+                                    val action = args?.optString("toolAction")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'") ?: ""
+                                    val summary = args?.optString("toolSummary")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'") ?: ""
+                                    val cmd = args?.optString("CommandLine")?.trim()?.removeSurrounding("\"")?.removeSurrounding("'") ?: ""
+                                    val title = when {
+                                        action.isNotBlank() -> action
+                                        summary.isNotBlank() -> summary
+                                        cmd.isNotBlank() -> cmd
+                                        else -> "Command"
+                                    }
+                                    currentAssistantSteps.add(
+                                        AgentExecutionStep(
+                                            id = "step_${i}_tool_${t}",
+                                            kind = AgentStepKind.COMMAND,
+                                            title = title,
+                                            detail = nextGenericContent,
+                                            isCompleted = true
+                                        )
+                                    )
+                                }
+                                "invoke_subagent" -> {
+                                    val subList = args?.optJSONArray("Subagents")
+                                    val firstSub = subList?.optJSONObject(0)
+                                    val role = firstSub?.optString("Role") ?: args?.optString("Role") ?: context.getString(R.string.subagent_default_title)
+                                    currentAssistantSteps.add(
+                                        AgentExecutionStep(
+                                            id = "step_${i}_tool_${t}",
+                                            kind = AgentStepKind.WORKING,
+                                            title = role,
+                                            detail = nextGenericContent,
+                                            isCompleted = true
+                                        )
+                                    )
+                                }
+                                else -> {
+                                    currentAssistantSteps.add(
+                                        AgentExecutionStep(
+                                            id = "step_${i}_tool_${t}",
+                                            kind = AgentStepKind.COMMAND,
+                                            title = toolName.replace('_', ' '),
+                                            detail = nextGenericContent,
+                                            isCompleted = true
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            flushAssistantIfNeeded()
+            messages
+        } catch (e: Throwable) {
+            emptyList()
         }
     }
 }

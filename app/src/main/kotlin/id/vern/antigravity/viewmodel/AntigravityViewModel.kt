@@ -3552,30 +3552,45 @@ class AntigravityViewModel : ViewModel() {
             try {
                 val cacheDir = File(context.filesDir, "cache").apply { mkdirs() }
 
-                val skillsUrl = URL("https://raw.githubusercontent.com/KuatoDev/antigravity-catalogue/main/skills.json")
-                val skillsConn = (skillsUrl.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                    requestMethod = "GET"
-                }
-                val skillsJson = skillsConn.inputStream.bufferedReader().use { it.readText() }
-                val parsedSkills = parseCatalogueJson(skillsJson, false)
-                if (parsedSkills.isNotEmpty()) {
-                    mutableSkillsCatalogue.value = parsedSkills
-                    try { File(cacheDir, "skills_catalogue.json").writeText(skillsJson) } catch (e: Exception) {}
+                fun fetchCatalogueText(urls: List<String>): String? {
+                    for (urlStr in urls) {
+                        try {
+                            val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                                connectTimeout = 8000
+                                readTimeout = 8000
+                                requestMethod = "GET"
+                            }
+                            if (conn.responseCode in 200..299) {
+                                val text = conn.inputStream.bufferedReader().use { it.readText() }
+                                if (text.isNotBlank()) return text
+                            }
+                        } catch (e: Exception) {
+                            Log.d("AntigravityViewModel", "Failed to fetch catalogue from $urlStr: ${e.message}")
+                        }
+                    }
+                    return null
                 }
 
-                val pluginsUrl = URL("https://raw.githubusercontent.com/KuatoDev/antigravity-catalogue/main/plugins.json")
-                val pluginsConn = (pluginsUrl.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                    requestMethod = "GET"
+                val skillUrls = listOf(
+                    "https://raw.githubusercontent.com/AltafYafai/antigravity-catalogue/main/skills.json",
+                    "https://raw.githubusercontent.com/KuatoDev/antigravity-catalogue/main/skills.json"
+                )
+                val skillsJson = fetchCatalogueText(skillUrls)
+                val parsedSkills = if (!skillsJson.isNullOrBlank()) parseCatalogueJson(skillsJson, false) else emptyList()
+                if (parsedSkills.isNotEmpty()) {
+                    mutableSkillsCatalogue.value = parsedSkills
+                    try { File(cacheDir, "skills_catalogue.json").writeText(skillsJson!!) } catch (e: Exception) {}
                 }
-                val pluginsJson = pluginsConn.inputStream.bufferedReader().use { it.readText() }
-                val parsedPlugins = parseCatalogueJson(pluginsJson, true)
+
+                val pluginUrls = listOf(
+                    "https://raw.githubusercontent.com/AltafYafai/antigravity-catalogue/main/plugins.json",
+                    "https://raw.githubusercontent.com/KuatoDev/antigravity-catalogue/main/plugins.json"
+                )
+                val pluginsJson = fetchCatalogueText(pluginUrls)
+                val parsedPlugins = if (!pluginsJson.isNullOrBlank()) parseCatalogueJson(pluginsJson, true) else emptyList()
                 if (parsedPlugins.isNotEmpty()) {
                     mutablePluginsCatalogue.value = parsedPlugins
-                    try { File(cacheDir, "plugins_catalogue.json").writeText(pluginsJson) } catch (e: Exception) {}
+                    try { File(cacheDir, "plugins_catalogue.json").writeText(pluginsJson!!) } catch (e: Exception) {}
                 }
 
                 lastCatalogueFetchTime = System.currentTimeMillis()

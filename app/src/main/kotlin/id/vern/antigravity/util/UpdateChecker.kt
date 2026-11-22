@@ -61,23 +61,27 @@ class UpdateChecker(private val context: Context) {
         currentVersion: String,
         isManualCheck: Boolean = false
     ): UpdateInfo? = withContext(Dispatchers.IO) {
-        val owner = GITHUB_OWNER
+        val candidateOwners = listOf("AltafYafai", GITHUB_OWNER)
         val repo = GITHUB_REPO
 
         var foundReleaseObj: JSONObject? = null
 
-        val latestUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
-        val (codeLatest, bodyLatest) = fetchGitHubApi(latestUrl)
+        for (owner in candidateOwners) {
+            val latestUrl = "https://api.github.com/repos/$owner/$repo/releases/latest"
+            val (codeLatest, bodyLatest) = fetchGitHubApi(latestUrl)
 
-        if (codeLatest == HttpURLConnection.HTTP_OK && !bodyLatest.isNullOrBlank()) {
-            try {
-                foundReleaseObj = JSONObject(bodyLatest)
-            } catch (e: Exception) {
-                Log.w(TAG, "Parse error for latest release: ${e.localizedMessage}")
+            if (codeLatest == HttpURLConnection.HTTP_OK && !bodyLatest.isNullOrBlank()) {
+                try {
+                    val obj = JSONObject(bodyLatest)
+                    if (obj.has("tag_name")) {
+                        foundReleaseObj = obj
+                        break
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Parse error for $owner latest release: ${e.localizedMessage}")
+                }
             }
-        }
 
-        if (foundReleaseObj == null) {
             val listUrl = "https://api.github.com/repos/$owner/$repo/releases?per_page=5"
             val (codeList, bodyList) = fetchGitHubApi(listUrl)
             if (codeList == HttpURLConnection.HTTP_OK && !bodyList.isNullOrBlank()) {
@@ -90,8 +94,9 @@ class UpdateChecker(private val context: Context) {
                             break
                         }
                     }
+                    if (foundReleaseObj != null) break
                 } catch (e: Exception) {
-                    Log.w(TAG, "Parse error for releases list: ${e.localizedMessage}")
+                    Log.w(TAG, "Parse error for $owner releases list: ${e.localizedMessage}")
                 }
             }
         }
@@ -303,20 +308,31 @@ class UpdateChecker(private val context: Context) {
 
     private fun isNewerVersion(currentVersion: String, remoteVersion: String): Boolean {
         try {
-            val cleanCurrent = currentVersion.lowercase().replace("v", "")
-            val cleanRemote = remoteVersion.lowercase().replace("v", "")
-            val currentParts = cleanCurrent.split(".")
-            val remoteParts = cleanRemote.split(".")
+            val cleanCurrent = currentVersion.trim().removePrefix("v").removePrefix("V")
+            val cleanRemote = remoteVersion.trim().removePrefix("v").removePrefix("V")
+            if (cleanCurrent == cleanRemote) return false
+
+            fun parseParts(ver: String): List<Int> {
+                val normalized = ver.replace(Regex("[^0-9.]"), ".")
+                return normalized.split(".")
+                    .filter { it.isNotBlank() }
+                    .mapNotNull { it.toIntOrNull() }
+            }
+
+            val currentParts = parseParts(cleanCurrent)
+            val remoteParts = parseParts(cleanRemote)
             val maxLength = maxOf(currentParts.size, remoteParts.size)
+
             for (i in 0 until maxLength) {
-                val currentPart = if (i < currentParts.size) currentParts[i].toIntOrNull() ?: 0 else 0
-                val remotePart = if (i < remoteParts.size) remoteParts[i].toIntOrNull() ?: 0 else 0
+                val currentPart = if (i < currentParts.size) currentParts[i] else 0
+                val remotePart = if (i < remoteParts.size) remoteParts[i] else 0
                 if (remotePart > currentPart) return true
                 else if (remotePart < currentPart) return false
             }
-            return false
+
+            return cleanRemote > cleanCurrent
         } catch (e: Exception) {
-            return remoteVersion.replace("v", "") > currentVersion.replace("v", "")
+            return remoteVersion.removePrefix("v") > currentVersion.removePrefix("v")
         }
     }
 
